@@ -35,6 +35,7 @@ tailwind.config = {
 <script crossorigin src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
 <script crossorigin src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
 <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
   html, body { background: #0a0e17; color: #e2e8f0; font-family: 'IBM Plex Mono', monospace; }
   .font-display { font-family: 'Bebas Neue', sans-serif; }
@@ -68,6 +69,13 @@ const {
 } = Recharts;
 
 /* ══════════════════════════════════════════
+   SUPABASE CLIENT
+   ══════════════════════════════════════════ */
+const SUPABASE_URL = 'https://wbyaevwqvusmmtafydso.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndieWFldndxdnVzbW10YWZ5ZHNvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE1MTc4ODAsImV4cCI6MjA4NzA5Mzg4MH0.MyeGUmtE2-YK2-gsN9fQaGbzY0IJki2jN4xQRqtcPYE';
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+/* ══════════════════════════════════════════
    CONSTANTS
    ══════════════════════════════════════════ */
 const C = {
@@ -78,7 +86,6 @@ const C = {
   lime: '#d4e157', indigo: '#5c6bc0',
 };
 const CHART_COLORS = [C.gold, C.cyan, C.green, C.danger, C.purple, C.orange, C.pink, C.teal];
-const CORS_PROXY = 'https://corsproxy.io/?';
 
 const GLOBAL_EXCHANGES = [
   { ticker: 'ice.us', name: 'ICE', label: 'Intercontinental Exchange' },
@@ -101,7 +108,8 @@ const EVENTS = [
   { date: '2024-10-25', label: 'Ключевая ставка 21%', color: C.danger },
 ];
 
-const KEY_RATE_HISTORY = [
+// Fallback key rate data (used if Supabase is unavailable)
+const KEY_RATE_FALLBACK = [
   { date: '2013-09-13', rate: 5.50 },
   { date: '2014-03-03', rate: 7.00 }, { date: '2014-04-28', rate: 7.50 },
   { date: '2014-10-31', rate: 9.50 }, { date: '2014-12-12', rate: 10.50 },
@@ -181,10 +189,10 @@ function interpolateKeyRate(rateData, from, to) {
 }
 
 function getPeriodDates(period) {
-  const to = '2024-12-31';
-  if (period === '3Y') return { from: '2022-01-01', to };
-  if (period === '5Y') return { from: '2020-01-01', to };
-  if (period === '10Y') return { from: '2015-01-01', to };
+  const to = new Date().toISOString().substring(0, 10);
+  if (period === '3Y') { const y = new Date(); y.setFullYear(y.getFullYear() - 3); return { from: y.toISOString().substring(0, 10), to }; }
+  if (period === '5Y') { const y = new Date(); y.setFullYear(y.getFullYear() - 5); return { from: y.toISOString().substring(0, 10), to }; }
+  if (period === '10Y') { const y = new Date(); y.setFullYear(y.getFullYear() - 10); return { from: y.toISOString().substring(0, 10), to }; }
   return { from: '2013-01-01', to };
 }
 
@@ -211,303 +219,217 @@ function ToastContainer() {
 }
 
 /* ══════════════════════════════════════════
-   CACHE
+   CACHE (sessionStorage)
    ══════════════════════════════════════════ */
 function cacheGet(k) { try { const r = sessionStorage.getItem('mx_' + k); return r ? JSON.parse(r) : null; } catch { return null; } }
 function cacheSet(k, v) { try { sessionStorage.setItem('mx_' + k, JSON.stringify(v)); } catch {} }
 function cacheClear() { try { Object.keys(sessionStorage).filter(k => k.startsWith('mx_')).forEach(k => sessionStorage.removeItem(k)); } catch {} }
 
-async function fetchJ(url, timeout = 15000) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeout);
-  try {
-    const r = await fetch(url, { signal: ctrl.signal });
-    clearTimeout(t);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return r;
-  } catch (e) { clearTimeout(t); throw e; }
-}
-
 /* ══════════════════════════════════════════
-   DATA FETCHERS
+   DATA FETCHERS (Supabase)
    ══════════════════════════════════════════ */
 
-// MOEX stock OHLCV history (paginated)
 async function fetchMoexStockHistory(from, to) {
   const ck = `stk_${from}_${to}`;
   const cc = cacheGet(ck);
   if (cc) return cc;
-  let all = [], start = 0;
   try {
-    while (true) {
-      const url = `https://iss.moex.com/iss/history/engines/stock/markets/shares/boards/TQBR/securities/MOEX.json?from=${from}&till=${to}&iss.meta=off&start=${start}`;
-      const r = await fetchJ(url);
-      const j = await r.json();
-      const h = j.history;
-      if (!h) break;
-      const cols = h.columns, rows = h.data;
-      if (!rows || rows.length === 0) break;
-      const di = cols.indexOf('TRADEDATE'), ci = cols.indexOf('CLOSE'),
-            oi = cols.indexOf('OPEN'), hi = cols.indexOf('HIGH'), li = cols.indexOf('LOW'),
-            vi = cols.indexOf('VOLUME'), vai = cols.indexOf('VALUE');
-      for (const row of rows) {
-        const close = row[ci];
-        if (close != null && close > 0) {
-          all.push({ date: row[di], open: row[oi], high: row[hi], low: row[li], close, volume: row[vi] || 0, value: row[vai] || 0 });
-        }
-      }
-      if (rows.length < 100) break;
-      start += 100;
-      await new Promise(r => setTimeout(r, 300));
-    }
-  } catch (e) { showToast(`MOEX история: ${e.message}`); }
-  cacheSet(ck, all);
-  return all;
+    const { data, error } = await sb
+      .from('moex_stock_history')
+      .select('trade_date, open, high, low, close, volume, value')
+      .gte('trade_date', from)
+      .lte('trade_date', to)
+      .order('trade_date', { ascending: true });
+    if (error) throw error;
+    const result = (data || []).map(r => ({
+      date: r.trade_date, open: +r.open, high: +r.high, low: +r.low,
+      close: +r.close, volume: +r.volume, value: +r.value,
+    }));
+    cacheSet(ck, result);
+    return result;
+  } catch (e) { showToast(`MOEX история: ${e.message}`); return []; }
 }
 
-// MOEX live data (ISSUECAPITALIZATION, ISSUESIZE)
 async function fetchMoexStockLive() {
   const ck = 'stk_live';
   const cc = cacheGet(ck);
   if (cc) return cc;
-  let data = {};
   try {
-    const url = 'https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/MOEX.json?iss.meta=off';
-    const r = await fetchJ(url);
-    const j = await r.json();
-    // securities section
-    const sec = j.securities;
-    if (sec && sec.data && sec.data[0]) {
-      const cols = sec.columns, row = sec.data[0];
-      const isIdx = cols.indexOf('ISSUESIZE');
-      data.issueSize = row[isIdx] || 0;
-    }
-    // marketdata section
-    const md = j.marketdata;
-    if (md && md.data && md.data[0]) {
-      const cols = md.columns, row = md.data[0];
-      data.last = row[cols.indexOf('LAST')];
-      data.open = row[cols.indexOf('OPEN')];
-      data.high = row[cols.indexOf('HIGH')];
-      data.low = row[cols.indexOf('LOW')];
-      data.cap = row[cols.indexOf('ISSUECAPITALIZATION')];
-      data.capTrend = row[cols.indexOf('TRENDISSUECAPITALIZATION')];
-      data.volToday = row[cols.indexOf('VOLTODAY')];
-      data.valToday = row[cols.indexOf('VALTODAY')];
-      data.numTrades = row[cols.indexOf('NUMTRADES')];
-      data.updateTime = row[cols.indexOf('UPDATETIME')];
-    }
-  } catch (e) { showToast(`MOEX live: ${e.message}`); }
-  cacheSet(ck, data);
-  return data;
+    const { data, error } = await sb
+      .from('moex_live')
+      .select('*')
+      .eq('id', 1)
+      .single();
+    if (error) throw error;
+    const result = {
+      last: data.last_price, open: data.open_price,
+      high: data.high_price, low: data.low_price,
+      cap: data.cap, capTrend: data.cap_trend,
+      volToday: data.vol_today, valToday: data.val_today,
+      numTrades: data.num_trades, issueSize: data.issue_size,
+      updateTime: data.update_time,
+    };
+    cacheSet(ck, result);
+    return result;
+  } catch (e) { showToast(`MOEX live: ${e.message}`); return {}; }
 }
 
-// MOEX security info (ISSUESIZE for cap calculation)
 async function fetchMoexSecurityInfo() {
-  const ck = 'stk_info';
-  const cc = cacheGet(ck);
-  if (cc) return cc;
-  let info = {};
-  try {
-    const url = 'https://iss.moex.com/iss/securities/MOEX.json?iss.meta=off';
-    const r = await fetchJ(url);
-    const j = await r.json();
-    if (j.description && j.description.data) {
-      for (const row of j.description.data) {
-        if (row[0] === 'ISSUESIZE') info.issueSize = parseInt(row[2]);
-        if (row[0] === 'ISIN') info.isin = row[2];
-        if (row[0] === 'LISTLEVEL') info.listLevel = row[2];
-      }
-    }
-  } catch (e) { showToast(`MOEX info: ${e.message}`); }
-  cacheSet(ck, info);
-  return info;
+  const live = await fetchMoexStockLive();
+  return { issueSize: live.issueSize || 2276401458 };
 }
 
-// MOEX dividends
 async function fetchMoexDividends() {
   const ck = 'stk_div';
   const cc = cacheGet(ck);
   if (cc) return cc;
-  let divs = [];
   try {
-    const url = 'https://iss.moex.com/iss/securities/MOEX/dividends.json?iss.meta=off';
-    const r = await fetchJ(url);
-    const j = await r.json();
-    if (j.dividends && j.dividends.data) {
-      const cols = j.dividends.columns;
-      const ri = cols.indexOf('registryclosedate'), vi = cols.indexOf('value'), ci = cols.indexOf('currencyid');
-      for (const row of j.dividends.data) {
-        divs.push({ date: row[ri], value: row[vi], currency: row[ci] || 'SUR' });
-      }
-    }
-  } catch (e) { showToast(`Дивиденды MOEX: ${e.message}`); }
-  cacheSet(ck, divs);
-  return divs;
+    const { data, error } = await sb
+      .from('moex_dividends')
+      .select('registry_close_date, value, currency')
+      .order('registry_close_date', { ascending: true });
+    if (error) throw error;
+    const result = (data || []).map(r => ({
+      date: r.registry_close_date, value: +r.value, currency: r.currency || 'SUR',
+    }));
+    cacheSet(ck, result);
+    return result;
+  } catch (e) { showToast(`Дивиденды MOEX: ${e.message}`); return []; }
 }
 
-// Index history (IMOEX, RTSI)
 async function fetchIndexHistory(ticker, from, to) {
   const ck = `idx_${ticker}_${from}_${to}`;
   const cc = cacheGet(ck);
   if (cc) return cc;
-  let all = [], start = 0;
   try {
-    while (true) {
-      const url = `https://iss.moex.com/iss/history/engines/stock/markets/index/boards/SNDX/securities/${ticker}.json?from=${from}&till=${to}&iss.meta=off&start=${start}`;
-      const r = await fetchJ(url);
-      const j = await r.json();
-      const h = j.history;
-      if (!h) break;
-      const rows = h.data;
-      if (!rows || rows.length === 0) break;
-      const cols = h.columns;
-      const di = cols.indexOf('TRADEDATE'), ci = cols.indexOf('CLOSE');
-      for (const row of rows) {
-        if (row[ci] > 0) all.push({ date: row[di], close: row[ci] });
-      }
-      if (rows.length < 100) break;
-      start += 100;
-      await new Promise(r => setTimeout(r, 300));
-    }
-  } catch (e) { showToast(`${ticker}: ${e.message}`); }
-  cacheSet(ck, all);
-  return all;
+    const { data, error } = await sb
+      .from('index_history')
+      .select('trade_date, close')
+      .eq('ticker', ticker)
+      .gte('trade_date', from)
+      .lte('trade_date', to)
+      .order('trade_date', { ascending: true });
+    if (error) throw error;
+    const result = (data || []).map(r => ({ date: r.trade_date, close: +r.close }));
+    cacheSet(ck, result);
+    return result;
+  } catch (e) { showToast(`${ticker}: ${e.message}`); return []; }
 }
 
-// USD/RUB
 async function fetchUSDRUB(from, to) {
   const ck = `usd_${from}_${to}`;
   const cc = cacheGet(ck);
   if (cc) return cc;
-  let all = [], start = 0;
   try {
-    while (true) {
-      const url = `https://iss.moex.com/iss/history/engines/currency/markets/selt/boards/CETS/securities/USD000UTSTOM.json?from=${from}&till=${to}&iss.meta=off&start=${start}`;
-      const r = await fetchJ(url);
-      const j = await r.json();
-      const h = j.history;
-      if (!h) break;
-      const rows = h.data;
-      if (!rows || rows.length === 0) break;
-      const cols = h.columns;
-      const di = cols.indexOf('TRADEDATE'), ci = cols.indexOf('CLOSE');
-      for (const row of rows) {
-        if (row[ci] > 0) all.push({ date: row[di], close: row[ci] });
-      }
-      if (rows.length < 100) break;
-      start += 100;
-      await new Promise(r => setTimeout(r, 300));
-    }
-  } catch (e) { showToast(`USD/RUB: ${e.message}`); }
-  cacheSet(ck, all);
-  return all;
+    const { data, error } = await sb
+      .from('currency_history')
+      .select('trade_date, close')
+      .eq('pair', 'USD/RUB')
+      .gte('trade_date', from)
+      .lte('trade_date', to)
+      .order('trade_date', { ascending: true });
+    if (error) throw error;
+    const result = (data || []).map(r => ({ date: r.trade_date, close: +r.close }));
+    cacheSet(ck, result);
+    return result;
+  } catch (e) { showToast(`USD/RUB: ${e.message}`); return []; }
 }
 
-// Brent
 async function fetchBrent(from, to) {
   const ck = `brent_${from}_${to}`;
   const cc = cacheGet(ck);
   if (cc) return cc;
-  let all = [], start = 0;
   try {
-    while (true) {
-      const url = `https://iss.moex.com/iss/history/engines/futures/markets/forts/securities/BR.json?from=${from}&till=${to}&iss.meta=off&start=${start}`;
-      const r = await fetchJ(url);
-      const j = await r.json();
-      const h = j.history;
-      if (!h) break;
-      const rows = h.data;
-      if (!rows || rows.length === 0) break;
-      const cols = h.columns;
-      const di = cols.indexOf('TRADEDATE'), ci = cols.indexOf('CLOSE');
-      for (const row of rows) {
-        if (row[ci] > 0) all.push({ date: row[di], close: row[ci] });
-      }
-      if (rows.length < 100) break;
-      start += 100;
-      await new Promise(r => setTimeout(r, 300));
-    }
-  } catch (e) { showToast(`Brent: ${e.message}`); }
-  const byDate = {};
-  all.forEach(d => { byDate[d.date] = d.close; });
-  const result = Object.entries(byDate).sort((a, b) => a[0].localeCompare(b[0])).map(([date, close]) => ({ date, close }));
-  cacheSet(ck, result);
-  return result;
+    const { data, error } = await sb
+      .from('brent_history')
+      .select('trade_date, close')
+      .gte('trade_date', from)
+      .lte('trade_date', to)
+      .order('trade_date', { ascending: true });
+    if (error) throw error;
+    const result = (data || []).map(r => ({ date: r.trade_date, close: +r.close }));
+    cacheSet(ck, result);
+    return result;
+  } catch (e) { showToast(`Brent: ${e.message}`); return []; }
 }
 
-// Trading volumes (market totals)
 async function fetchTradingVolumes(from) {
   const ck = `vol_${from}`;
   const cc = cacheGet(ck);
   if (cc) return cc;
-  let all = [], start = 0;
   try {
-    while (true) {
-      const url = `https://iss.moex.com/iss/history/engines/stock/markets/shares/totals.json?from=${from}&iss.meta=off&start=${start}`;
-      const r = await fetchJ(url);
-      const j = await r.json();
-      const h = j.history;
-      if (!h) break;
-      const rows = h.data;
-      if (!rows || rows.length === 0) break;
-      const cols = h.columns;
-      const di = cols.indexOf('TRADEDATE'), vai = cols.indexOf('VALUE');
-      for (const row of rows) {
-        all.push({ date: row[di], value: row[vai] || 0 });
-      }
-      if (rows.length < 100) break;
-      start += 100;
-      await new Promise(r => setTimeout(r, 300));
-    }
-  } catch (e) { showToast(`Обороты: ${e.message}`); }
-  cacheSet(ck, all);
-  return all;
+    const { data, error } = await sb
+      .from('trading_volumes')
+      .select('trade_date, value')
+      .gte('trade_date', from)
+      .order('trade_date', { ascending: true });
+    if (error) throw error;
+    const result = (data || []).map(r => ({ date: r.trade_date, value: +r.value }));
+    cacheSet(ck, result);
+    return result;
+  } catch (e) { showToast(`Обороты: ${e.message}`); return []; }
 }
 
-// World Bank indicators
 async function fetchWB(countries, indicator, from, to) {
   const ck = `wb_${indicator}_${countries}_${from}_${to}`;
   const cc = cacheGet(ck);
   if (cc) return cc;
-  let data = [];
   try {
-    const url = `https://api.worldbank.org/v2/country/${countries}/indicator/${indicator}?format=json&date=${from}:${to}&per_page=500`;
-    const r = await fetchJ(url);
-    const j = await r.json();
-    if (j && j[1]) {
-      data = j[1].filter(d => d.value != null).map(d => ({
-        country: d.country.id, year: parseInt(d.date), value: d.value
-      }));
-    }
-  } catch (e) { showToast(`World Bank: ${e.message}`); }
-  cacheSet(ck, data);
-  return data;
+    const { data, error } = await sb
+      .from('world_bank_indicators')
+      .select('country, year, value')
+      .eq('country', countries)
+      .eq('indicator', indicator)
+      .gte('year', from)
+      .lte('year', to)
+      .order('year', { ascending: true });
+    if (error) throw error;
+    const result = (data || []).map(r => ({ country: r.country, year: r.year, value: +r.value }));
+    cacheSet(ck, result);
+    return result;
+  } catch (e) { showToast(`World Bank: ${e.message}`); return []; }
 }
 
-// Global exchange stocks via stooq CSV (CORS proxy)
-async function fetchGlobalExchange(stooqTicker, from, to) {
-  const ck = `gx_${stooqTicker}_${from}_${to}`;
+async function fetchAllGlobalExchanges(from, to) {
+  const ck = `gx_all_${from}_${to}`;
   const cc = cacheGet(ck);
   if (cc) return cc;
-  let data = [];
   try {
-    const d1 = from.replace(/-/g, ''), d2 = to.replace(/-/g, '');
-    const url = `${CORS_PROXY}${encodeURIComponent(`https://stooq.com/q/d/l/?s=${stooqTicker}&i=m&d1=${d1}&d2=${d2}`)}`;
-    const r = await fetchJ(url, 20000);
-    const text = await r.text();
-    const lines = text.trim().split('\n');
-    for (let i = 1; i < lines.length; i++) {
-      const p = lines[i].split(',');
-      if (p.length >= 5) {
-        const close = parseFloat(p[4]);
-        if (!isNaN(close) && close > 0) data.push({ date: p[0], close });
-      }
+    const { data, error } = await sb
+      .from('global_exchanges')
+      .select('ticker, trade_date, close')
+      .gte('trade_date', from)
+      .lte('trade_date', to)
+      .order('trade_date', { ascending: true });
+    if (error) throw error;
+    const grouped = {};
+    for (const r of (data || [])) {
+      if (!grouped[r.ticker]) grouped[r.ticker] = [];
+      grouped[r.ticker].push({ date: r.trade_date, close: +r.close });
     }
-  } catch (e) { showToast(`${stooqTicker}: ${e.message}`, 'warn'); }
-  data.sort((a, b) => a.date.localeCompare(b.date));
-  cacheSet(ck, data);
-  return data;
+    cacheSet(ck, grouped);
+    return grouped;
+  } catch (e) { showToast(`Мировые биржи: ${e.message}`); return {}; }
+}
+
+async function fetchKeyRates() {
+  const ck = 'key_rates';
+  const cc = cacheGet(ck);
+  if (cc) return cc;
+  try {
+    const { data, error } = await sb
+      .from('key_rates')
+      .select('effective_date, rate')
+      .order('effective_date', { ascending: true });
+    if (error) throw error;
+    const result = (data || []).map(r => ({ date: r.effective_date, rate: +r.rate }));
+    if (result.length === 0) return KEY_RATE_FALLBACK;
+    cacheSet(ck, result);
+    return result;
+  } catch (e) {
+    showToast(`Ключевая ставка: ${e.message}`);
+    return KEY_RATE_FALLBACK;
+  }
 }
 
 /* ══════════════════════════════════════════
@@ -580,6 +502,7 @@ function MOEXDashboard() {
     imoex: [], rtsi: [], usdRub: [], brent: [], tradingVol: [],
     wbGdp: [], wbCpi: [],
     globalExchanges: {},
+    keyRateHistory: KEY_RATE_FALLBACK,
   });
   const loadId = useRef(0);
 
@@ -588,6 +511,7 @@ function MOEXDashboard() {
     setLoading(true);
     if (force) cacheClear();
     const { from, to } = getPeriodDates(period);
+    const currentYear = new Date().getFullYear();
 
     const results = await Promise.allSettled([
       fetchMoexStockHistory(from, to),              // 0
@@ -599,24 +523,26 @@ function MOEXDashboard() {
       fetchUSDRUB(from, to),                         // 6
       fetchBrent(from, to),                          // 7
       fetchTradingVolumes(from),                     // 8
-      fetchWB('RU', 'NY.GDP.MKTP.CD', 2013, 2024),  // 9
-      fetchWB('RU', 'FP.CPI.TOTL.ZG', 2013, 2024),  // 10
-      ...GLOBAL_EXCHANGES.map(g => fetchGlobalExchange(g.ticker, from, to)), // 11-15
+      fetchWB('RU', 'NY.GDP.MKTP.CD', 2013, currentYear),  // 9
+      fetchWB('RU', 'FP.CPI.TOTL.ZG', 2013, currentYear),  // 10
+      fetchAllGlobalExchanges(from, to),             // 11
+      fetchKeyRates(),                               // 12
     ]);
 
     if (myId !== loadId.current) return;
 
     const arr = i => { const r = results[i]; return r.status === 'fulfilled' && Array.isArray(r.value) ? r.value : []; };
     const obj = i => { const r = results[i]; return r.status === 'fulfilled' && r.value && typeof r.value === 'object' ? r.value : {}; };
-    const gx = {};
-    GLOBAL_EXCHANGES.forEach((g, i) => { gx[g.name] = arr(11 + i); });
+
+    const gxData = results[11].status === 'fulfilled' && results[11].value ? results[11].value : {};
 
     setData({
       stock: arr(0), live: obj(1), info: obj(2), dividends: arr(3),
       imoex: arr(4), rtsi: arr(5), usdRub: arr(6), brent: arr(7),
       tradingVol: arr(8),
       wbGdp: arr(9), wbCpi: arr(10),
-      globalExchanges: gx,
+      globalExchanges: gxData,
+      keyRateHistory: arr(12).length > 0 ? arr(12) : KEY_RATE_FALLBACK,
     });
     if (myId === loadId.current) setLoading(false);
   }, [period]);
@@ -698,7 +624,7 @@ function MOEXDashboard() {
     const ms = monthlyDownsample(data.stock);
     const mb = monthlyDownsample(data.brent);
     const mu = monthlyDownsample(data.usdRub);
-    const kr = interpolateKeyRate(KEY_RATE_HISTORY, pFrom, pTo);
+    const kr = interpolateKeyRate(data.keyRateHistory, pFrom, pTo);
     const bms = ms[0]?.close || 1, bmb = mb[0]?.close || 1, bmu = mu[0]?.close || 1;
     const map = {};
     ms.forEach(d => { const m = d.date.substring(0, 7); if (!map[m]) map[m] = { month: m }; map[m].moex = +(d.close / bms * 100).toFixed(1); });
@@ -743,7 +669,7 @@ function MOEXDashboard() {
   // Macro data
   const gdpData = useMemo(() => data.wbGdp.filter(d => d.country === 'RU').sort((a, b) => a.year - b.year).map(d => ({ year: d.year, gdp: d.value })), [data]);
   const cpiData = useMemo(() => data.wbCpi.filter(d => d.country === 'RU').sort((a, b) => a.year - b.year).map(d => ({ year: d.year, cpi: d.value })), [data]);
-  const keyRateData = useMemo(() => interpolateKeyRate(KEY_RATE_HISTORY, pFrom, pTo), [pFrom, pTo]);
+  const keyRateData = useMemo(() => interpolateKeyRate(data.keyRateHistory, pFrom, pTo), [data.keyRateHistory, pFrom, pTo]);
 
   // Tick interval helper
   const ti = (arr, n = 12) => Math.max(1, Math.floor((arr?.length || 1) / n));
@@ -785,7 +711,7 @@ function MOEXDashboard() {
       ),
 
       // ── 1. ЦЕНА АКЦИИ ──
-      React.createElement(Section, { title: 'ЦЕНА АКЦИИ MOEX', source: 'ISS MOEX / TQBR', updatedAt: data.stock[data.stock.length - 1]?.date },
+      React.createElement(Section, { title: 'ЦЕНА АКЦИИ MOEX', source: 'Supabase / ISS MOEX', updatedAt: data.stock[data.stock.length - 1]?.date },
         loading && priceChartData.length === 0
           ? React.createElement(Skeleton, { h: 'h-80' })
           : React.createElement(ResponsiveContainer, { width: '100%', height: 400 },
@@ -810,7 +736,7 @@ function MOEXDashboard() {
       ),
 
       // ── 2. КАПИТАЛИЗАЦИЯ ──
-      React.createElement(Section, { title: 'КАПИТАЛИЗАЦИЯ MOEX', source: 'ISS MOEX (расчёт)' },
+      React.createElement(Section, { title: 'КАПИТАЛИЗАЦИЯ MOEX', source: 'Supabase / ISS MOEX (расчёт)' },
         loading && capChartData.length === 0
           ? React.createElement(Skeleton, { h: 'h-64' })
           : React.createElement('div', null,
@@ -830,7 +756,7 @@ function MOEXDashboard() {
       ),
 
       // ── 3. MOEX vs ИНДЕКСЫ ──
-      React.createElement(Section, { title: 'MOEX vs ИНДЕКСЫ (ДОХОДНОСТЬ %)', source: 'ISS MOEX' },
+      React.createElement(Section, { title: 'MOEX vs ИНДЕКСЫ (ДОХОДНОСТЬ %)', source: 'Supabase / ISS MOEX' },
         loading && vsIndexData.length === 0
           ? React.createElement(Skeleton, { h: 'h-72' })
           : React.createElement(ResponsiveContainer, { width: '100%', height: 320 },
@@ -849,7 +775,7 @@ function MOEXDashboard() {
       ),
 
       // ── 4. ДИВИДЕНДЫ ──
-      React.createElement(Section, { title: 'ДИВИДЕНДЫ', source: 'ISS MOEX / dividends.json' },
+      React.createElement(Section, { title: 'ДИВИДЕНДЫ', source: 'Supabase / ISS MOEX' },
         loading && divChartData.length === 0
           ? React.createElement(Skeleton, { h: 'h-64' })
           : divChartData.length === 0
@@ -896,7 +822,7 @@ function MOEXDashboard() {
       ),
 
       // ── 5. ФАКТОРНЫЙ АНАЛИЗ ──
-      React.createElement(Section, { title: 'ФАКТОРНЫЙ АНАЛИЗ', source: 'ISS MOEX' },
+      React.createElement(Section, { title: 'ФАКТОРНЫЙ АНАЛИЗ', source: 'Supabase / ISS MOEX' },
         loading && factorData.length === 0
           ? React.createElement(Skeleton, { h: 'h-80' })
           : React.createElement('div', null,
@@ -935,7 +861,7 @@ function MOEXDashboard() {
       ),
 
       // ── 6. ОБОРОТЫ БИРЖИ ──
-      React.createElement(Section, { title: 'ОБОРОТЫ ФОНДОВОГО РЫНКА (₽)', source: 'ISS MOEX / totals' },
+      React.createElement(Section, { title: 'ОБОРОТЫ ФОНДОВОГО РЫНКА (₽)', source: 'Supabase / ISS MOEX' },
         loading && volData.length === 0
           ? React.createElement(Skeleton, { h: 'h-64' })
           : volData.length === 0
@@ -955,7 +881,7 @@ function MOEXDashboard() {
       ),
 
       // ── 7. МИРОВЫЕ БИРЖИ ──
-      React.createElement(Section, { title: 'MOEX vs МИРОВЫЕ БИРЖИ (ДОХОДНОСТЬ %)', source: 'ISS MOEX / stooq.com' },
+      React.createElement(Section, { title: 'MOEX vs МИРОВЫЕ БИРЖИ (ДОХОДНОСТЬ %)', source: 'Supabase / stooq.com' },
         loading && globalData.length === 0
           ? React.createElement(Skeleton, { h: 'h-72' })
           : React.createElement(ResponsiveContainer, { width: '100%', height: 340 },
@@ -1043,7 +969,7 @@ function MOEXDashboard() {
 
       // ── FOOTER ──
       React.createElement('footer', { className: 'text-center py-8 border-t border-gray-800 text-xs text-muted space-y-2' },
-        React.createElement('p', null, 'Данные: ISS MOEX • ЦБ РФ • World Bank • stooq.com'),
+        React.createElement('p', null, 'Данные: Supabase • ISS MOEX • ЦБ РФ • World Bank • stooq.com'),
         React.createElement('p', null, 'Дашборд анализирует акции ПАО «Московская биржа» (тикер MOEX, TQBR). Не является инвестиционной рекомендацией.'),
         React.createElement('p', null,
           React.createElement('a', { href: 'https://www.moex.com/ru/ir', target: '_blank', className: 'text-gold hover:underline' }, 'IR Московской биржи'),
