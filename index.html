@@ -203,6 +203,28 @@ function localDateStr(d) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+/* Convert YYYY-MM-DD string to timestamp (ms) for numeric XAxis */
+function dateToTs(d) { return new Date(d + 'T00:00:00').getTime(); }
+
+const MONTHS_RU = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
+/* Human-readable axis date: "20 фев 26" */
+function fmtAxisDate(ts) {
+  if (!ts || isNaN(ts)) return '';
+  const d = new Date(ts);
+  const dd = d.getDate();
+  const mm = MONTHS_RU[d.getMonth()];
+  const yy = String(d.getFullYear()).slice(2);
+  return `${dd} ${mm} ${yy}`;
+}
+
+/* Tooltip date: "20 февраля 2026" */
+const MONTHS_RU_FULL = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
+function fmtTooltipDate(ts) {
+  if (!ts || isNaN(ts)) return '';
+  const d = new Date(ts);
+  return `${d.getDate()} ${MONTHS_RU_FULL[d.getMonth()]} ${d.getFullYear()}`;
+}
+
 function getPeriodDates(period) {
   const now = new Date();
   const to = localDateStr(now);
@@ -492,9 +514,9 @@ function KPICard({ label, value, subtitle, dayChange, monthChange, loading }) {
 }
 
 /* Enhanced tooltip — shows date, period info, all series with values */
-function DailyTooltip({ active, payload, label, periodLabel, suffix, format }) {
+function DailyTooltip({ active, payload, label, periodLabel, suffix, format, isTimestamp = true }) {
   if (!active || !payload || payload.length === 0) return null;
-  const dateStr = label ? fmtDate(label) : '';
+  const dateStr = isTimestamp ? fmtTooltipDate(label) : (label ? String(label) : '');
   return React.createElement('div', { className: 'bg-bg-card border border-gray-600 rounded-lg p-3 text-xs shadow-xl max-w-xs' },
     React.createElement('div', { className: 'flex items-center justify-between gap-4 mb-1.5' },
       React.createElement('span', { className: 'text-gold font-semibold' }, dateStr),
@@ -635,6 +657,9 @@ function MOEXDashboard() {
   const issueSize = useMemo(() => data.live?.issueSize || 2276401458, [data]);
   const { from: pFrom, to: pTo } = getPeriodDates(period);
   const periodLabel = getPeriodLabel(period);
+  // Timestamps for XAxis domain: left = period start, right = today
+  const tsFrom = dateToTs(pFrom);
+  const tsTo = dateToTs(pTo);
 
   // KPIs — computed from daily data
   const kpis = useMemo(() => {
@@ -679,9 +704,9 @@ function MOEXDashboard() {
     };
   }, [data, issueSize]);
 
-  // Price chart — DAILY data
+  // Price chart — DAILY data with ts for numeric X axis
   const priceChartData = useMemo(() => {
-    return data.stock.map(d => ({ date: d.date, close: d.close, value: d.value }));
+    return data.stock.map(d => ({ ts: dateToTs(d.date), date: d.date, close: d.close, value: d.value }));
   }, [data]);
 
   // Dividend reference lines for price chart — on daily axis
@@ -702,7 +727,7 @@ function MOEXDashboard() {
       const moexCap = d.close * issueSize;
       const mktCap = imoexByDate[d.date];
       return {
-        date: d.date,
+        ts: dateToTs(d.date), date: d.date,
         cap: moexCap,
         share: mktCap && mktCap > 0 ? +(moexCap / mktCap * 100).toFixed(3) : null,
       };
@@ -714,28 +739,28 @@ function MOEXDashboard() {
     const bm = data.stock[0]?.close || 1;
     const bi = data.imoex[0]?.close || 1;
     const map = {};
-    data.stock.forEach(d => { map[d.date] = { date: d.date, MOEX: +((d.close / bm - 1) * 100).toFixed(2) }; });
+    data.stock.forEach(d => { map[d.date] = { ts: dateToTs(d.date), date: d.date, MOEX: +((d.close / bm - 1) * 100).toFixed(2) }; });
     data.imoex.forEach(d => {
-      if (!map[d.date]) map[d.date] = { date: d.date };
+      if (!map[d.date]) map[d.date] = { ts: dateToTs(d.date), date: d.date };
       map[d.date].IMOEX = +((d.close / bi - 1) * 100).toFixed(2);
     });
-    return Object.values(map).sort((a, b) => a.date.localeCompare(b.date));
+    return Object.values(map).sort((a, b) => a.ts - b.ts);
   }, [data]);
 
   // MOEX vs Peers (normalized %) — DAILY
   const peerData = useMemo(() => {
     const bm = data.stock[0]?.close || 1;
     const map = {};
-    data.stock.forEach(d => { map[d.date] = { date: d.date, MOEX: +((d.close / bm - 1) * 100).toFixed(2) }; });
+    data.stock.forEach(d => { map[d.date] = { ts: dateToTs(d.date), date: d.date, MOEX: +((d.close / bm - 1) * 100).toFixed(2) }; });
     PEER_STOCKS.forEach(p => {
       const arr = data.peers[p.ticker] || [];
       const b = arr[0]?.close || 1;
       arr.forEach(d => {
-        if (!map[d.date]) map[d.date] = { date: d.date };
+        if (!map[d.date]) map[d.date] = { ts: dateToTs(d.date), date: d.date };
         map[d.date][p.ticker] = +((d.close / b - 1) * 100).toFixed(2);
       });
     });
-    return Object.values(map).sort((a, b) => a.date.localeCompare(b.date));
+    return Object.values(map).sort((a, b) => a.ts - b.ts);
   }, [data]);
 
   // Dividends chart
@@ -753,11 +778,11 @@ function MOEXDashboard() {
     const krByDate = {};
     kr.forEach(d => { krByDate[d.date] = d.rate; });
     const map = {};
-    data.stock.forEach(d => { map[d.date] = { date: d.date, moex: +(d.close / bms * 100).toFixed(2) }; });
-    data.brent.forEach(d => { if (!map[d.date]) map[d.date] = { date: d.date }; map[d.date].brent = +(d.close / bmb * 100).toFixed(2); });
-    data.usdRub.forEach(d => { if (!map[d.date]) map[d.date] = { date: d.date }; map[d.date].usdRub = +(d.close / bmu * 100).toFixed(2); });
+    data.stock.forEach(d => { map[d.date] = { ts: dateToTs(d.date), date: d.date, moex: +(d.close / bms * 100).toFixed(2) }; });
+    data.brent.forEach(d => { if (!map[d.date]) map[d.date] = { ts: dateToTs(d.date), date: d.date }; map[d.date].brent = +(d.close / bmb * 100).toFixed(2); });
+    data.usdRub.forEach(d => { if (!map[d.date]) map[d.date] = { ts: dateToTs(d.date), date: d.date }; map[d.date].usdRub = +(d.close / bmu * 100).toFixed(2); });
     Object.keys(krByDate).forEach(d => { if (map[d]) map[d].keyRate = krByDate[d]; });
-    return Object.values(map).sort((a, b) => a.date.localeCompare(b.date));
+    return Object.values(map).sort((a, b) => a.ts - b.ts);
   }, [data, pFrom, pTo]);
 
   // Correlations — daily returns
@@ -771,31 +796,36 @@ function MOEXDashboard() {
 
   // Trading volumes — DAILY
   const volData = useMemo(() => {
-    return data.tradingVol.map(d => ({ date: d.date, value: d.value }));
+    return data.tradingVol.map(d => ({ ts: dateToTs(d.date), date: d.date, value: d.value }));
   }, [data]);
 
   // Global exchanges (normalized %) — DAILY
   const globalData = useMemo(() => {
     const bm = data.stock[0]?.close || 1;
     const map = {};
-    data.stock.forEach(d => { map[d.date] = { date: d.date, MOEX: +((d.close / bm - 1) * 100).toFixed(2) }; });
+    data.stock.forEach(d => { map[d.date] = { ts: dateToTs(d.date), date: d.date, MOEX: +((d.close / bm - 1) * 100).toFixed(2) }; });
     GLOBAL_EXCHANGES.forEach(g => {
       const arr = data.globalExchanges[g.name] || [];
       const b = arr[0]?.close || 1;
-      arr.forEach(d => { if (!map[d.date]) map[d.date] = { date: d.date }; map[d.date][g.name] = +((d.close / b - 1) * 100).toFixed(2); });
+      arr.forEach(d => { if (!map[d.date]) map[d.date] = { ts: dateToTs(d.date), date: d.date }; map[d.date][g.name] = +((d.close / b - 1) * 100).toFixed(2); });
     });
-    return Object.values(map).sort((a, b) => a.date.localeCompare(b.date));
+    return Object.values(map).sort((a, b) => a.ts - b.ts);
   }, [data]);
 
   // Macro
   const gdpData = useMemo(() => data.wbGdp.filter(d => d.country === 'RU').sort((a, b) => a.year - b.year).map(d => ({ year: d.year, gdp: d.value })), [data]);
   const cpiData = useMemo(() => data.wbCpi.filter(d => d.country === 'RU').sort((a, b) => a.year - b.year).map(d => ({ year: d.year, cpi: d.value })), [data]);
-  const keyRateData = useMemo(() => expandKeyRateDaily(data.keyRateHistory, pFrom, pTo), [data.keyRateHistory, pFrom, pTo]);
-
-  // Tick interval helper — for daily data, show ~15 ticks
-  const ti = (arr, n = 15) => Math.max(1, Math.floor((arr?.length || 1) / n));
+  const keyRateData = useMemo(() => expandKeyRateDaily(data.keyRateHistory, pFrom, pTo).map(d => ({ ...d, ts: dateToTs(d.date) })), [data.keyRateHistory, pFrom, pTo]);
 
   /* ─── RENDER ─── */
+  // Common XAxis props: numeric time axis, domain = [periodStart, today]
+  const xAxisProps = {
+    dataKey: 'ts', type: 'number', scale: 'time',
+    domain: [tsFrom, tsTo],
+    tick: { fontSize: 10, fill: C.muted },
+    tickFormatter: fmtAxisDate,
+  };
+
   // Tooltip builders
   const ttipPrice = { content: (props) => React.createElement(DailyTooltip, { ...props, periodLabel, format: (v, name) => {
     if (name && name.includes('Объём')) return fmtNum(v) + ' ₽';
@@ -812,12 +842,6 @@ function MOEXDashboard() {
     return v?.toFixed(1);
   }}) };
   const ttipVol = { content: (props) => React.createElement(DailyTooltip, { ...props, periodLabel, format: (v) => fmtNum(v) + ' ₽' }) };
-
-  // Format X axis tick to show abbreviated date
-  const fmtXTick = (d) => {
-    if (!d || d.length < 10) return d;
-    return d.substring(5); // MM-DD
-  };
 
   return React.createElement('div', { className: 'min-h-screen bg-bg text-gray-200' },
     React.createElement(ToastContainer),
@@ -880,14 +904,14 @@ function MOEXDashboard() {
           : React.createElement(ResponsiveContainer, { width: '100%', height: 400 },
               React.createElement(ComposedChart, { data: priceChartData, syncId: 'moex', margin: { top: 20, right: 10, left: 0, bottom: 5 } },
                 React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#1e293b' }),
-                React.createElement(XAxis, { dataKey: 'date', tick: { fontSize: 10, fill: C.muted }, tickFormatter: fmtXTick, interval: ti(priceChartData) }),
+                React.createElement(XAxis, { ...xAxisProps }),
                 React.createElement(YAxis, { yAxisId: 'price', tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => v + '₽', domain: ['auto', 'auto'] }),
                 React.createElement(YAxis, { yAxisId: 'vol', orientation: 'right', tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => fmtNum(v) }),
                 React.createElement(Tooltip, ttipPrice),
                 // Dividend cutoff lines — alternating label positions
                 ...divLines.map((dl, i) =>
                   React.createElement(ReferenceLine, {
-                    key: 'div' + i, x: dl.x, yAxisId: 'price',
+                    key: 'div' + i, x: dateToTs(dl.x), yAxisId: 'price',
                     stroke: C.green, strokeDasharray: '4 3', strokeWidth: 1.5,
                     label: { value: `÷${dl.label}`, position: i % 2 === 0 ? 'top' : 'insideTop', fontSize: 10, fill: C.green, fontWeight: 600 }
                   })
@@ -895,7 +919,7 @@ function MOEXDashboard() {
                 // Key events
                 ...EVENTS.filter(e => ['2014-03-17', '2022-02-24', '2013-02-15'].includes(e.date) && e.date >= pFrom).map((e, i) =>
                   React.createElement(ReferenceLine, {
-                    key: 'ev' + i, x: e.date, yAxisId: 'price',
+                    key: 'ev' + i, x: dateToTs(e.date), yAxisId: 'price',
                     stroke: e.color, strokeDasharray: '3 3',
                     label: { value: e.label.substring(0, 20), position: 'insideTopLeft', fontSize: 8, fill: e.color }
                   })
@@ -914,7 +938,7 @@ function MOEXDashboard() {
               React.createElement(ResponsiveContainer, { width: '100%', height: 320 },
                 React.createElement(ComposedChart, { data: capChartData, syncId: 'moex' },
                   React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#1e293b' }),
-                  React.createElement(XAxis, { dataKey: 'date', tick: { fontSize: 10, fill: C.muted }, tickFormatter: fmtXTick, interval: ti(capChartData) }),
+                  React.createElement(XAxis, { ...xAxisProps }),
                   React.createElement(YAxis, { yAxisId: 'cap', tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => fmtNum(v) }),
                   React.createElement(YAxis, { yAxisId: 'share', orientation: 'right', tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => v + '%', domain: [0, 'auto'] }),
                   React.createElement(Tooltip, ttipCap),
@@ -939,7 +963,7 @@ function MOEXDashboard() {
           : React.createElement(ResponsiveContainer, { width: '100%', height: 320 },
               React.createElement(LineChart, { data: vsIndexData, syncId: 'moex' },
                 React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#1e293b' }),
-                React.createElement(XAxis, { dataKey: 'date', tick: { fontSize: 10, fill: C.muted }, tickFormatter: fmtXTick, interval: ti(vsIndexData) }),
+                React.createElement(XAxis, { ...xAxisProps }),
                 React.createElement(YAxis, { tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => v.toFixed(0) + '%' }),
                 React.createElement(Tooltip, ttipPct),
                 React.createElement(ReferenceLine, { y: 0, stroke: C.muted, strokeDasharray: '2 2' }),
@@ -963,7 +987,7 @@ function MOEXDashboard() {
           : React.createElement(ResponsiveContainer, { width: '100%', height: 340 },
               React.createElement(LineChart, { data: peerData, syncId: 'moex' },
                 React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#1e293b' }),
-                React.createElement(XAxis, { dataKey: 'date', tick: { fontSize: 10, fill: C.muted }, tickFormatter: fmtXTick, interval: ti(peerData) }),
+                React.createElement(XAxis, { ...xAxisProps }),
                 React.createElement(YAxis, { tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => v + '%' }),
                 React.createElement(Tooltip, ttipPct),
                 React.createElement(ReferenceLine, { y: 0, stroke: C.muted, strokeDasharray: '2 2' }),
@@ -989,7 +1013,7 @@ function MOEXDashboard() {
                       React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#1e293b' }),
                       React.createElement(XAxis, { dataKey: 'year', tick: { fontSize: 10, fill: C.muted } }),
                       React.createElement(YAxis, { tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => v + '₽' }),
-                      React.createElement(Tooltip, { content: (props) => React.createElement(DailyTooltip, { ...props, format: (v) => v?.toFixed(2) + ' ₽' }) }),
+                      React.createElement(Tooltip, { content: (props) => React.createElement(DailyTooltip, { ...props, isTimestamp: false, format: (v) => v?.toFixed(2) + ' ₽' }) }),
                       React.createElement(Bar, { dataKey: 'value', name: 'Дивиденд', fill: C.green, radius: [3, 3, 0, 0] })
                     )
                   )
@@ -1037,7 +1061,7 @@ function MOEXDashboard() {
               React.createElement(ResponsiveContainer, { width: '100%', height: 340 },
                 React.createElement(ComposedChart, { data: factorData, syncId: 'moex' },
                   React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#1e293b' }),
-                  React.createElement(XAxis, { dataKey: 'date', tick: { fontSize: 10, fill: C.muted }, tickFormatter: fmtXTick, interval: ti(factorData) }),
+                  React.createElement(XAxis, { ...xAxisProps }),
                   React.createElement(YAxis, { yAxisId: 'left', tick: { fontSize: 10, fill: C.muted } }),
                   React.createElement(YAxis, { yAxisId: 'right', orientation: 'right', tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => v + '%' }),
                   React.createElement(Tooltip, ttipFactor),
@@ -1076,7 +1100,7 @@ function MOEXDashboard() {
                 React.createElement(ResponsiveContainer, { width: '100%', height: 280 },
                   React.createElement(BarChart, { data: volData, syncId: 'moex' },
                     React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#1e293b' }),
-                    React.createElement(XAxis, { dataKey: 'date', tick: { fontSize: 10, fill: C.muted }, tickFormatter: fmtXTick, interval: ti(volData) }),
+                    React.createElement(XAxis, { ...xAxisProps }),
                     React.createElement(YAxis, { tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => fmtNum(v) }),
                     React.createElement(Tooltip, ttipVol),
                     React.createElement(Bar, { dataKey: 'value', name: 'Обороты', fill: C.cyan, radius: [1, 1, 0, 0] })
@@ -1104,7 +1128,7 @@ function MOEXDashboard() {
           : React.createElement(ResponsiveContainer, { width: '100%', height: 340 },
               React.createElement(LineChart, { data: globalData, syncId: 'moex' },
                 React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#1e293b' }),
-                React.createElement(XAxis, { dataKey: 'date', tick: { fontSize: 10, fill: C.muted }, tickFormatter: fmtXTick, interval: ti(globalData) }),
+                React.createElement(XAxis, { ...xAxisProps }),
                 React.createElement(YAxis, { tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => v + '%' }),
                 React.createElement(Tooltip, ttipPct),
                 React.createElement(ReferenceLine, { y: 0, stroke: C.muted, strokeDasharray: '2 2' }),
@@ -1131,7 +1155,7 @@ function MOEXDashboard() {
                   React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#1e293b' }),
                   React.createElement(XAxis, { dataKey: 'year', tick: { fontSize: 10, fill: C.muted } }),
                   React.createElement(YAxis, { tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => fmtNum(v) }),
-                  React.createElement(Tooltip, { content: (props) => React.createElement(DailyTooltip, { ...props, format: (v) => '$' + fmtNum(v) }) }),
+                  React.createElement(Tooltip, { content: (props) => React.createElement(DailyTooltip, { ...props, isTimestamp: false, format: (v) => '$' + fmtNum(v) }) }),
                   React.createElement(Bar, { dataKey: 'gdp', name: 'ВВП', fill: C.teal, radius: [2, 2, 0, 0] })
                 )
               )
@@ -1144,7 +1168,7 @@ function MOEXDashboard() {
                   React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#1e293b' }),
                   React.createElement(XAxis, { dataKey: 'year', tick: { fontSize: 10, fill: C.muted } }),
                   React.createElement(YAxis, { tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => v + '%' }),
-                  React.createElement(Tooltip, { content: (props) => React.createElement(DailyTooltip, { ...props, format: (v) => v?.toFixed(1) + '%' }) }),
+                  React.createElement(Tooltip, { content: (props) => React.createElement(DailyTooltip, { ...props, isTimestamp: false, format: (v) => v?.toFixed(1) + '%' }) }),
                   React.createElement(Bar, { dataKey: 'cpi', name: 'CPI', fill: C.orange, radius: [2, 2, 0, 0] })
                 )
               )
@@ -1153,7 +1177,7 @@ function MOEXDashboard() {
           React.createElement(ResponsiveContainer, { width: '100%', height: 240 },
             React.createElement(AreaChart, { data: keyRateData, syncId: 'moex' },
               React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#1e293b' }),
-              React.createElement(XAxis, { dataKey: 'date', tick: { fontSize: 10, fill: C.muted }, tickFormatter: fmtXTick, interval: ti(keyRateData) }),
+              React.createElement(XAxis, { ...xAxisProps }),
               React.createElement(YAxis, { tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => v + '%' }),
               React.createElement(Tooltip, { content: (props) => React.createElement(DailyTooltip, { ...props, periodLabel, format: (v) => v?.toFixed(2) + '%' }) }),
               React.createElement(Area, { type: 'stepAfter', dataKey: 'rate', name: 'Ставка', stroke: C.purple, fill: C.purple, fillOpacity: 0.15, strokeWidth: 2 })
