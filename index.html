@@ -177,10 +177,10 @@ function dailyReturns(data) {
 /* Expand key rates to daily series */
 function expandKeyRateDaily(rateData, from, to) {
   const result = [];
-  let d = new Date(from);
-  const end = new Date(to);
+  let d = new Date(from + 'T00:00:00');
+  const end = new Date(to + 'T00:00:00');
   while (d <= end) {
-    const ds = d.toISOString().substring(0, 10);
+    const ds = localDateStr(d);
     let rate = rateData[0]?.rate || 0;
     for (const r of rateData) {
       if (r.date <= ds) rate = r.rate; else break;
@@ -195,12 +195,29 @@ function expandKeyRateDaily(rateData, from, to) {
   return result;
 }
 
+/* Format local date as YYYY-MM-DD (avoids UTC shift from toISOString) */
+function localDateStr(d) {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 function getPeriodDates(period) {
-  const to = new Date().toISOString().substring(0, 10);
-  const y = new Date();
-  if (period === '1Y') { y.setFullYear(y.getFullYear() - 1); return { from: y.toISOString().substring(0, 10), to }; }
-  if (period === '3Y') { y.setFullYear(y.getFullYear() - 3); return { from: y.toISOString().substring(0, 10), to }; }
-  if (period === '5Y') { y.setFullYear(y.getFullYear() - 5); return { from: y.toISOString().substring(0, 10), to }; }
+  const now = new Date();
+  const to = localDateStr(now);
+  if (period === '1Y') {
+    const d = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
+    return { from: localDateStr(d), to };
+  }
+  if (period === '3Y') {
+    const d = new Date(now.getFullYear() - 3, now.getMonth(), now.getDate());
+    return { from: localDateStr(d), to };
+  }
+  if (period === '5Y') {
+    const d = new Date(now.getFullYear() - 5, now.getMonth(), now.getDate());
+    return { from: localDateStr(d), to };
+  }
   return { from: '2013-01-01', to };
 }
 
@@ -222,9 +239,9 @@ function getChanges(arr) {
   const dayChg = prev.close > 0 ? ((last.close / prev.close - 1) * 100) : null;
 
   // Find value ~30 days ago
-  const targetDate = new Date(last.date);
+  const targetDate = new Date(last.date + 'T00:00:00');
   targetDate.setDate(targetDate.getDate() - 30);
-  const tds = targetDate.toISOString().substring(0, 10);
+  const tds = localDateStr(targetDate);
   const monthAgo = findNearest(arr, tds);
   const monthChg = monthAgo && monthAgo.close > 0 ? ((last.close / monthAgo.close - 1) * 100) : null;
 
