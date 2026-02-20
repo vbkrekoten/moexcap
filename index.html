@@ -657,9 +657,12 @@ function MOEXDashboard() {
   const issueSize = useMemo(() => data.live?.issueSize || 2276401458, [data]);
   const { from: pFrom, to: pTo } = getPeriodDates(period);
   const periodLabel = getPeriodLabel(period);
-  // Timestamps for XAxis domain: left = period start, right = today
+
+  // Dynamic axis bounds: right = min(today, last data point + small padding)
+  // left = period start
+  const lastStockDate = data.stock.length > 0 ? data.stock[data.stock.length - 1].date : pTo;
   const tsFrom = dateToTs(pFrom);
-  const tsTo = dateToTs(pTo);
+  const tsTo = dateToTs(lastStockDate <= pTo ? lastStockDate : pTo);
 
   // KPIs — computed from daily data
   const kpis = useMemo(() => {
@@ -818,12 +821,13 @@ function MOEXDashboard() {
   const keyRateData = useMemo(() => expandKeyRateDaily(data.keyRateHistory, pFrom, pTo).map(d => ({ ...d, ts: dateToTs(d.date) })), [data.keyRateHistory, pFrom, pTo]);
 
   /* ─── RENDER ─── */
-  // Common XAxis props: numeric time axis, domain = [periodStart, today]
+  // Common XAxis props: numeric time axis, domain = [periodStart, lastDataDate]
   const xAxisProps = {
     dataKey: 'ts', type: 'number', scale: 'time',
     domain: [tsFrom, tsTo],
     tick: { fontSize: 10, fill: C.muted },
     tickFormatter: fmtAxisDate,
+    tickCount: 8,
   };
 
   // Tooltip builders
