@@ -130,6 +130,9 @@ const KEY_RATE_FALLBACK = [
   { date: '2022-09-19', rate: 7.50 }, { date: '2023-07-24', rate: 8.50 },
   { date: '2023-10-30', rate: 15.00 }, { date: '2023-12-18', rate: 16.00 },
   { date: '2024-07-26', rate: 18.00 }, { date: '2024-10-25', rate: 21.00 },
+  { date: '2025-06-06', rate: 20.00 }, { date: '2025-07-28', rate: 18.00 },
+  { date: '2025-09-12', rate: 17.00 }, { date: '2025-10-27', rate: 16.50 },
+  { date: '2025-12-22', rate: 16.00 }, { date: '2026-02-13', rate: 15.50 },
 ];
 
 /* ══════════════════════════════════════════
@@ -307,6 +310,10 @@ function cacheClear() { try { Object.keys(sessionStorage).filter(k => k.startsWi
    DATA FETCHERS (Supabase) — all return daily data
    ══════════════════════════════════════════ */
 
+/* Supabase defaults to 1000 rows max.
+   We use range(0, 9999) to fetch up to 10000 rows — enough for all daily data. */
+const MAX_ROWS = 9999;
+
 async function fetchMoexStockHistory(from, to) {
   const ck = `stk_${from}_${to}`;
   const cc = cacheGet(ck);
@@ -316,7 +323,8 @@ async function fetchMoexStockHistory(from, to) {
       .from('moex_stock_history')
       .select('trade_date, open, high, low, close, volume, value')
       .gte('trade_date', from).lte('trade_date', to)
-      .order('trade_date', { ascending: true });
+      .order('trade_date', { ascending: true })
+      .range(0, MAX_ROWS);
     if (error) throw error;
     const result = (data || []).map(r => ({
       date: r.trade_date, open: +r.open, high: +r.high, low: +r.low,
@@ -365,7 +373,7 @@ async function fetchIndexHistory(ticker, from, to) {
   const cc = cacheGet(ck);
   if (cc) return cc;
   try {
-    const { data, error } = await sb.from('index_history').select('trade_date, close, capitalization').eq('ticker', ticker).gte('trade_date', from).lte('trade_date', to).order('trade_date', { ascending: true });
+    const { data, error } = await sb.from('index_history').select('trade_date, close, capitalization').eq('ticker', ticker).gte('trade_date', from).lte('trade_date', to).order('trade_date', { ascending: true }).range(0, MAX_ROWS);
     if (error) throw error;
     const result = (data || []).map(r => ({ date: r.trade_date, close: +r.close, capitalization: r.capitalization ? +r.capitalization : null }));
     cacheSet(ck, result);
@@ -378,7 +386,7 @@ async function fetchUSDRUB(from, to) {
   const cc = cacheGet(ck);
   if (cc) return cc;
   try {
-    const { data, error } = await sb.from('currency_history').select('trade_date, close').eq('pair', 'USD/RUB').gte('trade_date', from).lte('trade_date', to).order('trade_date', { ascending: true });
+    const { data, error } = await sb.from('currency_history').select('trade_date, close').eq('pair', 'USD/RUB').gte('trade_date', from).lte('trade_date', to).order('trade_date', { ascending: true }).range(0, MAX_ROWS);
     if (error) throw error;
     const result = (data || []).map(r => ({ date: r.trade_date, close: +r.close }));
     cacheSet(ck, result);
@@ -391,7 +399,7 @@ async function fetchBrent(from, to) {
   const cc = cacheGet(ck);
   if (cc) return cc;
   try {
-    const { data, error } = await sb.from('brent_history').select('trade_date, close').gte('trade_date', from).lte('trade_date', to).order('trade_date', { ascending: true });
+    const { data, error } = await sb.from('brent_history').select('trade_date, close').gte('trade_date', from).lte('trade_date', to).order('trade_date', { ascending: true }).range(0, MAX_ROWS);
     if (error) throw error;
     const result = (data || []).map(r => ({ date: r.trade_date, close: +r.close }));
     cacheSet(ck, result);
@@ -404,7 +412,7 @@ async function fetchTradingVolumes(from, to) {
   const cc = cacheGet(ck);
   if (cc) return cc;
   try {
-    const { data, error } = await sb.from('trading_volumes').select('trade_date, value').gte('trade_date', from).lte('trade_date', to).order('trade_date', { ascending: true });
+    const { data, error } = await sb.from('trading_volumes').select('trade_date, value').gte('trade_date', from).lte('trade_date', to).order('trade_date', { ascending: true }).range(0, MAX_ROWS);
     if (error) throw error;
     const result = (data || []).map(r => ({ date: r.trade_date, value: +r.value }));
     cacheSet(ck, result);
@@ -430,7 +438,7 @@ async function fetchAllGlobalExchanges(from, to) {
   const cc = cacheGet(ck);
   if (cc) return cc;
   try {
-    const { data, error } = await sb.from('global_exchanges').select('ticker, trade_date, close').gte('trade_date', from).lte('trade_date', to).order('trade_date', { ascending: true });
+    const { data, error } = await sb.from('global_exchanges').select('ticker, trade_date, close').gte('trade_date', from).lte('trade_date', to).order('trade_date', { ascending: true }).range(0, MAX_ROWS);
     if (error) throw error;
     const grouped = {};
     for (const r of (data || [])) {
@@ -447,12 +455,15 @@ async function fetchAllPeers(from, to) {
   const cc = cacheGet(ck);
   if (cc) return cc;
   try {
-    const { data, error } = await sb.from('peer_stock_history').select('ticker, trade_date, close').gte('trade_date', from).lte('trade_date', to).order('trade_date', { ascending: true });
-    if (error) throw error;
+    /* Peers can have ~3200 rows per ticker × 5 tickers = ~16000 total.
+       Fetch per-ticker to stay within limits. */
     const grouped = {};
-    for (const r of (data || [])) {
-      if (!grouped[r.ticker]) grouped[r.ticker] = [];
-      grouped[r.ticker].push({ date: r.trade_date, close: +r.close });
+    for (const p of PEER_STOCKS) {
+      const { data, error } = await sb.from('peer_stock_history').select('trade_date, close')
+        .eq('ticker', p.ticker).gte('trade_date', from).lte('trade_date', to)
+        .order('trade_date', { ascending: true }).range(0, MAX_ROWS);
+      if (error) throw error;
+      grouped[p.ticker] = (data || []).map(r => ({ date: r.trade_date, close: +r.close }));
     }
     cacheSet(ck, grouped);
     return grouped;
