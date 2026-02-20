@@ -42,6 +42,7 @@ CREATE TABLE index_history (
   ticker     TEXT NOT NULL,
   trade_date DATE NOT NULL,
   close      NUMERIC(12,4) NOT NULL,
+  capitalization NUMERIC(20,2),
   PRIMARY KEY (ticker, trade_date)
 );
 
@@ -82,7 +83,15 @@ CREATE TABLE global_exchanges (
   PRIMARY KEY (ticker, trade_date)
 );
 
--- 10. Key Rates (CBR)
+-- 10. Peer Stock History (финсектор: SBER, VTBR, T, CBOM, BSPB)
+CREATE TABLE peer_stock_history (
+  ticker     TEXT NOT NULL,
+  trade_date DATE NOT NULL,
+  close      NUMERIC(12,4) NOT NULL,
+  PRIMARY KEY (ticker, trade_date)
+);
+
+-- 11. Key Rates (CBR)
 CREATE TABLE key_rates (
   effective_date DATE PRIMARY KEY,
   rate           NUMERIC(5,2) NOT NULL
@@ -108,6 +117,7 @@ ALTER TABLE brent_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trading_volumes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE world_bank_indicators ENABLE ROW LEVEL SECURITY;
 ALTER TABLE global_exchanges ENABLE ROW LEVEL SECURITY;
+ALTER TABLE peer_stock_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE key_rates ENABLE ROW LEVEL SECURITY;
 ALTER TABLE meta ENABLE ROW LEVEL SECURITY;
 
@@ -120,5 +130,6 @@ CREATE POLICY "Public read" ON brent_history FOR SELECT TO anon USING (true);
 CREATE POLICY "Public read" ON trading_volumes FOR SELECT TO anon USING (true);
 CREATE POLICY "Public read" ON world_bank_indicators FOR SELECT TO anon USING (true);
 CREATE POLICY "Public read" ON global_exchanges FOR SELECT TO anon USING (true);
+CREATE POLICY "Public read" ON peer_stock_history FOR SELECT TO anon USING (true);
 CREATE POLICY "Public read" ON key_rates FOR SELECT TO anon USING (true);
 CREATE POLICY "Public read" ON meta FOR SELECT TO anon USING (true);

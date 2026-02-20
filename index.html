@@ -83,7 +83,7 @@ const C = {
   gold: '#e8c547', cyan: '#4fc3f7', danger: '#ef5350',
   muted: '#8892a4', green: '#66bb6a', purple: '#ab47bc',
   orange: '#ffa726', pink: '#ec407a', teal: '#26a69a',
-  lime: '#d4e157', indigo: '#5c6bc0',
+  lime: '#d4e157', indigo: '#5c6bc0', blue: '#42a5f5',
 };
 const CHART_COLORS = [C.gold, C.cyan, C.green, C.danger, C.purple, C.orange, C.pink, C.teal];
 
@@ -93,6 +93,14 @@ const GLOBAL_EXCHANGES = [
   { ticker: '388.hk', name: 'HKEX', label: 'Hong Kong Exchanges' },
   { ticker: 'lseg.uk', name: 'LSEG', label: 'London Stock Exchange' },
   { ticker: 'db1.de', name: 'DB1', label: 'Deutsche Börse' },
+];
+
+const PEER_STOCKS = [
+  { ticker: 'SBER', label: 'Сбербанк', color: C.green },
+  { ticker: 'VTBR', label: 'ВТБ', color: C.cyan },
+  { ticker: 'T', label: 'Т-Банк', color: C.orange },
+  { ticker: 'CBOM', label: 'МКБ', color: C.pink },
+  { ticker: 'BSPB', label: 'БСП', color: C.indigo },
 ];
 
 const EVENTS = [
@@ -108,7 +116,6 @@ const EVENTS = [
   { date: '2024-10-25', label: 'Ключевая ставка 21%', color: C.danger },
 ];
 
-// Fallback key rate data (used if Supabase is unavailable)
 const KEY_RATE_FALLBACK = [
   { date: '2013-09-13', rate: 5.50 },
   { date: '2014-03-03', rate: 7.00 }, { date: '2014-04-28', rate: 7.50 },
@@ -139,7 +146,6 @@ function fmtNum(n, dec = 0) {
 function fmtPct(n) { return n == null ? '—' : (n >= 0 ? '+' : '') + n.toFixed(1) + '%'; }
 function fmtDate(d) { return d ? new Date(d).toLocaleDateString('ru-RU') : '—'; }
 
-// Pearson correlation on two arrays
 function pearson(x, y) {
   const n = Math.min(x.length, y.length);
   if (n < 5) return null;
@@ -153,7 +159,6 @@ function pearson(x, y) {
   return denom === 0 ? 0 : (n * sxy - sx * sy) / denom;
 }
 
-// Monthly returns from price array [{date, close}]
 function monthlyReturns(data) {
   const monthly = monthlyDownsample(data);
   const ret = [];
@@ -190,9 +195,11 @@ function interpolateKeyRate(rateData, from, to) {
 
 function getPeriodDates(period) {
   const to = new Date().toISOString().substring(0, 10);
-  if (period === '3Y') { const y = new Date(); y.setFullYear(y.getFullYear() - 3); return { from: y.toISOString().substring(0, 10), to }; }
-  if (period === '5Y') { const y = new Date(); y.setFullYear(y.getFullYear() - 5); return { from: y.toISOString().substring(0, 10), to }; }
-  if (period === '10Y') { const y = new Date(); y.setFullYear(y.getFullYear() - 10); return { from: y.toISOString().substring(0, 10), to }; }
+  const y = new Date();
+  if (period === 'Q') { y.setMonth(y.getMonth() - 3); return { from: y.toISOString().substring(0, 10), to }; }
+  if (period === '1Y') { y.setFullYear(y.getFullYear() - 1); return { from: y.toISOString().substring(0, 10), to }; }
+  if (period === '3Y') { y.setFullYear(y.getFullYear() - 3); return { from: y.toISOString().substring(0, 10), to }; }
+  if (period === '5Y') { y.setFullYear(y.getFullYear() - 5); return { from: y.toISOString().substring(0, 10), to }; }
   return { from: '2013-01-01', to };
 }
 
@@ -237,8 +244,7 @@ async function fetchMoexStockHistory(from, to) {
     const { data, error } = await sb
       .from('moex_stock_history')
       .select('trade_date, open, high, low, close, volume, value')
-      .gte('trade_date', from)
-      .lte('trade_date', to)
+      .gte('trade_date', from).lte('trade_date', to)
       .order('trade_date', { ascending: true });
     if (error) throw error;
     const result = (data || []).map(r => ({
@@ -255,11 +261,7 @@ async function fetchMoexStockLive() {
   const cc = cacheGet(ck);
   if (cc) return cc;
   try {
-    const { data, error } = await sb
-      .from('moex_live')
-      .select('*')
-      .eq('id', 1)
-      .single();
+    const { data, error } = await sb.from('moex_live').select('*').eq('id', 1).single();
     if (error) throw error;
     const result = {
       last: data.last_price, open: data.open_price,
@@ -274,27 +276,17 @@ async function fetchMoexStockLive() {
   } catch (e) { showToast(`MOEX live: ${e.message}`); return {}; }
 }
 
-async function fetchMoexSecurityInfo() {
-  const live = await fetchMoexStockLive();
-  return { issueSize: live.issueSize || 2276401458 };
-}
-
 async function fetchMoexDividends() {
   const ck = 'stk_div';
   const cc = cacheGet(ck);
   if (cc) return cc;
   try {
-    const { data, error } = await sb
-      .from('moex_dividends')
-      .select('registry_close_date, value, currency')
-      .order('registry_close_date', { ascending: true });
+    const { data, error } = await sb.from('moex_dividends').select('registry_close_date, value, currency').order('registry_close_date', { ascending: true });
     if (error) throw error;
-    const result = (data || []).map(r => ({
-      date: r.registry_close_date, value: +r.value, currency: r.currency || 'SUR',
-    }));
+    const result = (data || []).map(r => ({ date: r.registry_close_date, value: +r.value, currency: r.currency || 'SUR' }));
     cacheSet(ck, result);
     return result;
-  } catch (e) { showToast(`Дивиденды MOEX: ${e.message}`); return []; }
+  } catch (e) { showToast(`Дивиденды: ${e.message}`); return []; }
 }
 
 async function fetchIndexHistory(ticker, from, to) {
@@ -302,15 +294,9 @@ async function fetchIndexHistory(ticker, from, to) {
   const cc = cacheGet(ck);
   if (cc) return cc;
   try {
-    const { data, error } = await sb
-      .from('index_history')
-      .select('trade_date, close')
-      .eq('ticker', ticker)
-      .gte('trade_date', from)
-      .lte('trade_date', to)
-      .order('trade_date', { ascending: true });
+    const { data, error } = await sb.from('index_history').select('trade_date, close, capitalization').eq('ticker', ticker).gte('trade_date', from).lte('trade_date', to).order('trade_date', { ascending: true });
     if (error) throw error;
-    const result = (data || []).map(r => ({ date: r.trade_date, close: +r.close }));
+    const result = (data || []).map(r => ({ date: r.trade_date, close: +r.close, capitalization: r.capitalization ? +r.capitalization : null }));
     cacheSet(ck, result);
     return result;
   } catch (e) { showToast(`${ticker}: ${e.message}`); return []; }
@@ -321,13 +307,7 @@ async function fetchUSDRUB(from, to) {
   const cc = cacheGet(ck);
   if (cc) return cc;
   try {
-    const { data, error } = await sb
-      .from('currency_history')
-      .select('trade_date, close')
-      .eq('pair', 'USD/RUB')
-      .gte('trade_date', from)
-      .lte('trade_date', to)
-      .order('trade_date', { ascending: true });
+    const { data, error } = await sb.from('currency_history').select('trade_date, close').eq('pair', 'USD/RUB').gte('trade_date', from).lte('trade_date', to).order('trade_date', { ascending: true });
     if (error) throw error;
     const result = (data || []).map(r => ({ date: r.trade_date, close: +r.close }));
     cacheSet(ck, result);
@@ -340,12 +320,7 @@ async function fetchBrent(from, to) {
   const cc = cacheGet(ck);
   if (cc) return cc;
   try {
-    const { data, error } = await sb
-      .from('brent_history')
-      .select('trade_date, close')
-      .gte('trade_date', from)
-      .lte('trade_date', to)
-      .order('trade_date', { ascending: true });
+    const { data, error } = await sb.from('brent_history').select('trade_date, close').gte('trade_date', from).lte('trade_date', to).order('trade_date', { ascending: true });
     if (error) throw error;
     const result = (data || []).map(r => ({ date: r.trade_date, close: +r.close }));
     cacheSet(ck, result);
@@ -353,16 +328,12 @@ async function fetchBrent(from, to) {
   } catch (e) { showToast(`Brent: ${e.message}`); return []; }
 }
 
-async function fetchTradingVolumes(from) {
-  const ck = `vol_${from}`;
+async function fetchTradingVolumes(from, to) {
+  const ck = `vol_${from}_${to}`;
   const cc = cacheGet(ck);
   if (cc) return cc;
   try {
-    const { data, error } = await sb
-      .from('trading_volumes')
-      .select('trade_date, value')
-      .gte('trade_date', from)
-      .order('trade_date', { ascending: true });
+    const { data, error } = await sb.from('trading_volumes').select('trade_date, value').gte('trade_date', from).lte('trade_date', to).order('trade_date', { ascending: true });
     if (error) throw error;
     const result = (data || []).map(r => ({ date: r.trade_date, value: +r.value }));
     cacheSet(ck, result);
@@ -375,14 +346,7 @@ async function fetchWB(countries, indicator, from, to) {
   const cc = cacheGet(ck);
   if (cc) return cc;
   try {
-    const { data, error } = await sb
-      .from('world_bank_indicators')
-      .select('country, year, value')
-      .eq('country', countries)
-      .eq('indicator', indicator)
-      .gte('year', from)
-      .lte('year', to)
-      .order('year', { ascending: true });
+    const { data, error } = await sb.from('world_bank_indicators').select('country, year, value').eq('country', countries).eq('indicator', indicator).gte('year', from).lte('year', to).order('year', { ascending: true });
     if (error) throw error;
     const result = (data || []).map(r => ({ country: r.country, year: r.year, value: +r.value }));
     cacheSet(ck, result);
@@ -395,12 +359,7 @@ async function fetchAllGlobalExchanges(from, to) {
   const cc = cacheGet(ck);
   if (cc) return cc;
   try {
-    const { data, error } = await sb
-      .from('global_exchanges')
-      .select('ticker, trade_date, close')
-      .gte('trade_date', from)
-      .lte('trade_date', to)
-      .order('trade_date', { ascending: true });
+    const { data, error } = await sb.from('global_exchanges').select('ticker, trade_date, close').gte('trade_date', from).lte('trade_date', to).order('trade_date', { ascending: true });
     if (error) throw error;
     const grouped = {};
     for (const r of (data || [])) {
@@ -412,15 +371,29 @@ async function fetchAllGlobalExchanges(from, to) {
   } catch (e) { showToast(`Мировые биржи: ${e.message}`); return {}; }
 }
 
+async function fetchAllPeers(from, to) {
+  const ck = `peers_${from}_${to}`;
+  const cc = cacheGet(ck);
+  if (cc) return cc;
+  try {
+    const { data, error } = await sb.from('peer_stock_history').select('ticker, trade_date, close').gte('trade_date', from).lte('trade_date', to).order('trade_date', { ascending: true });
+    if (error) throw error;
+    const grouped = {};
+    for (const r of (data || [])) {
+      if (!grouped[r.ticker]) grouped[r.ticker] = [];
+      grouped[r.ticker].push({ date: r.trade_date, close: +r.close });
+    }
+    cacheSet(ck, grouped);
+    return grouped;
+  } catch (e) { showToast(`Peers: ${e.message}`); return {}; }
+}
+
 async function fetchKeyRates() {
   const ck = 'key_rates';
   const cc = cacheGet(ck);
   if (cc) return cc;
   try {
-    const { data, error } = await sb
-      .from('key_rates')
-      .select('effective_date, rate')
-      .order('effective_date', { ascending: true });
+    const { data, error } = await sb.from('key_rates').select('effective_date, rate').order('effective_date', { ascending: true });
     if (error) throw error;
     const result = (data || []).map(r => ({ date: r.effective_date, rate: +r.rate }));
     if (result.length === 0) return KEY_RATE_FALLBACK;
@@ -473,7 +446,7 @@ function ChartTooltip({ active, payload, label, format }) {
   if (!active || !payload || payload.length === 0) return null;
   return React.createElement('div', { className: 'bg-bg-card border border-gray-600 rounded-lg p-3 text-xs shadow-xl' },
     React.createElement('div', { className: 'text-gold font-semibold mb-1' }, label),
-    payload.map((p, i) => React.createElement('div', { key: i, className: 'flex items-center gap-2' },
+    payload.filter(p => p.value != null).map((p, i) => React.createElement('div', { key: i, className: 'flex items-center gap-2' },
       React.createElement('div', { className: 'w-2 h-2 rounded-full', style: { background: p.color || p.stroke } }),
       React.createElement('span', { className: 'text-muted' }, `${p.name}: `),
       React.createElement('span', { className: 'text-white font-mono' }, format ? format(p.value) : fmtNum(p.value, 2))
@@ -482,7 +455,11 @@ function ChartTooltip({ active, payload, label, format }) {
 }
 
 function PeriodSelector({ period, setPeriod }) {
-  const ps = [{ key: '3Y', label: '3 года' }, { key: '5Y', label: '5 лет' }, { key: '10Y', label: '10 лет' }, { key: 'ALL', label: 'Всё' }];
+  const ps = [
+    { key: 'Q', label: 'Квартал' }, { key: '1Y', label: 'Год' },
+    { key: '3Y', label: '3 года' }, { key: '5Y', label: '5 лет' },
+    { key: 'ALL', label: 'Всё' },
+  ];
   return React.createElement('div', { className: 'flex gap-1 bg-bg-card2 rounded-lg p-1' },
     ps.map(p => React.createElement('button', {
       key: p.key, onClick: () => setPeriod(p.key),
@@ -491,20 +468,60 @@ function PeriodSelector({ period, setPeriod }) {
   );
 }
 
+/* Toggle Legend — clickable chips to show/hide chart series */
+function ToggleLegend({ items, hidden, onToggle }) {
+  return React.createElement('div', { className: 'flex flex-wrap gap-1.5 mb-3' },
+    items.map(it => {
+      const off = hidden.has(it.key);
+      return React.createElement('button', {
+        key: it.key,
+        onClick: () => onToggle(it.key),
+        className: `flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-mono border transition-all ${off ? 'border-gray-700 text-gray-600' : 'border-gray-600 text-gray-200 hover:border-gray-400'}`,
+      },
+        React.createElement('div', {
+          className: 'w-2.5 h-2.5 rounded-full transition-opacity',
+          style: { background: it.color, opacity: off ? 0.25 : 1 }
+        }),
+        React.createElement('span', { style: { textDecoration: off ? 'line-through' : 'none' } }, it.label)
+      );
+    })
+  );
+}
+
+/* Hook for toggle state */
+function useToggle(keys) {
+  const [hidden, setHidden] = useState(new Set());
+  const toggle = useCallback((key) => {
+    setHidden(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
+  return [hidden, toggle];
+}
+
 /* ══════════════════════════════════════════
    MAIN DASHBOARD
    ══════════════════════════════════════════ */
 function MOEXDashboard() {
-  const [period, setPeriod] = useState('ALL');
+  const [period, setPeriod] = useState('3Y');
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState({
-    stock: [], live: {}, info: {}, dividends: [],
-    imoex: [], rtsi: [], usdRub: [], brent: [], tradingVol: [],
+    stock: [], live: {}, dividends: [],
+    imoex: [], usdRub: [], brent: [], tradingVol: [],
     wbGdp: [], wbCpi: [],
     globalExchanges: {},
+    peers: {},
     keyRateHistory: KEY_RATE_FALLBACK,
   });
   const loadId = useRef(0);
+
+  // Toggle states for charts with legends
+  const [hidIdx, toggleIdx] = useToggle();
+  const [hidPeer, togglePeer] = useToggle();
+  const [hidFactor, toggleFactor] = useToggle();
+  const [hidGlobal, toggleGlobal] = useToggle();
 
   const loadAll = useCallback(async (force = false) => {
     const myId = ++loadId.current;
@@ -516,17 +533,16 @@ function MOEXDashboard() {
     const results = await Promise.allSettled([
       fetchMoexStockHistory(from, to),              // 0
       fetchMoexStockLive(),                          // 1
-      fetchMoexSecurityInfo(),                       // 2
-      fetchMoexDividends(),                          // 3
-      fetchIndexHistory('IMOEX', from, to),          // 4
-      fetchIndexHistory('RTSI', from, to),           // 5
-      fetchUSDRUB(from, to),                         // 6
-      fetchBrent(from, to),                          // 7
-      fetchTradingVolumes(from),                     // 8
-      fetchWB('RU', 'NY.GDP.MKTP.CD', 2013, currentYear),  // 9
-      fetchWB('RU', 'FP.CPI.TOTL.ZG', 2013, currentYear),  // 10
-      fetchAllGlobalExchanges(from, to),             // 11
-      fetchKeyRates(),                               // 12
+      fetchMoexDividends(),                          // 2
+      fetchIndexHistory('IMOEX', from, to),          // 3
+      fetchUSDRUB(from, to),                         // 4
+      fetchBrent(from, to),                          // 5
+      fetchTradingVolumes(from, to),                 // 6
+      fetchWB('RU', 'NY.GDP.MKTP.CD', 2013, currentYear),  // 7
+      fetchWB('RU', 'FP.CPI.TOTL.ZG', 2013, currentYear),  // 8
+      fetchAllGlobalExchanges(from, to),             // 9
+      fetchAllPeers(from, to),                       // 10
+      fetchKeyRates(),                               // 11
     ]);
 
     if (myId !== loadId.current) return;
@@ -534,15 +550,14 @@ function MOEXDashboard() {
     const arr = i => { const r = results[i]; return r.status === 'fulfilled' && Array.isArray(r.value) ? r.value : []; };
     const obj = i => { const r = results[i]; return r.status === 'fulfilled' && r.value && typeof r.value === 'object' ? r.value : {}; };
 
-    const gxData = results[11].status === 'fulfilled' && results[11].value ? results[11].value : {};
-
     setData({
-      stock: arr(0), live: obj(1), info: obj(2), dividends: arr(3),
-      imoex: arr(4), rtsi: arr(5), usdRub: arr(6), brent: arr(7),
-      tradingVol: arr(8),
-      wbGdp: arr(9), wbCpi: arr(10),
-      globalExchanges: gxData,
-      keyRateHistory: arr(12).length > 0 ? arr(12) : KEY_RATE_FALLBACK,
+      stock: arr(0), live: obj(1), dividends: arr(2),
+      imoex: arr(3), usdRub: arr(4), brent: arr(5),
+      tradingVol: arr(6),
+      wbGdp: arr(7), wbCpi: arr(8),
+      globalExchanges: obj(9),
+      peers: obj(10),
+      keyRateHistory: arr(11).length > 0 ? arr(11) : KEY_RATE_FALLBACK,
     });
     if (myId === loadId.current) setLoading(false);
   }, [period]);
@@ -550,11 +565,8 @@ function MOEXDashboard() {
   useEffect(() => { loadAll(); }, [loadAll]);
 
   /* ─── COMPUTED ─── */
-
-  // Issue size for cap calculation
-  const issueSize = useMemo(() => {
-    return data.live?.issueSize || data.info?.issueSize || 2276401458;
-  }, [data]);
+  const issueSize = useMemo(() => data.live?.issueSize || 2276401458, [data]);
+  const { from: pFrom, to: pTo } = getPeriodDates(period);
 
   // KPIs
   const kpis = useMemo(() => {
@@ -580,46 +592,68 @@ function MOEXDashboard() {
 
   // Price chart (monthly)
   const priceChartData = useMemo(() => {
-    return monthlyDownsample(data.stock).map(d => ({
-      month: d.date.substring(0, 7),
-      close: d.close,
-      value: d.value,
-    }));
+    return monthlyDownsample(data.stock).map(d => ({ month: d.date.substring(0, 7), close: d.close, value: d.value }));
   }, [data]);
 
-  // Capitalization chart
-  const capChartData = useMemo(() => {
-    return monthlyDownsample(data.stock).map(d => ({
-      month: d.date.substring(0, 7),
-      cap: d.close * issueSize,
+  // Dividend reference lines for price chart
+  const divLines = useMemo(() => {
+    return data.dividends.filter(d => d.date >= pFrom && d.date <= pTo).map(d => ({
+      x: d.date.substring(0, 7),
+      label: d.value.toFixed(2) + '₽',
+      date: d.date,
     }));
+  }, [data.dividends, pFrom, pTo]);
+
+  // Capitalization + market share
+  const capChartData = useMemo(() => {
+    const ms = monthlyDownsample(data.stock);
+    const mi = monthlyDownsample(data.imoex);
+    const imoexByMonth = {};
+    mi.forEach(d => { imoexByMonth[d.date.substring(0, 7)] = d.capitalization; });
+    return ms.map(d => {
+      const m = d.date.substring(0, 7);
+      const moexCap = d.close * issueSize;
+      const mktCap = imoexByMonth[m];
+      return {
+        month: m,
+        cap: moexCap,
+        share: mktCap && mktCap > 0 ? +(moexCap / mktCap * 100).toFixed(2) : null,
+      };
+    });
   }, [data, issueSize]);
 
   // MOEX vs Indices (normalized %)
   const vsIndexData = useMemo(() => {
     const ms = monthlyDownsample(data.stock);
     const mi = monthlyDownsample(data.imoex);
-    const mr = monthlyDownsample(data.rtsi);
-    const bm = ms[0]?.close || 1, bi = mi[0]?.close || 1, br = mr[0]?.close || 1;
+    const bm = ms[0]?.close || 1, bi = mi[0]?.close || 1;
     const map = {};
     ms.forEach(d => { const m = d.date.substring(0, 7); if (!map[m]) map[m] = { month: m }; map[m].MOEX = ((d.close / bm - 1) * 100); });
     mi.forEach(d => { const m = d.date.substring(0, 7); if (!map[m]) map[m] = { month: m }; map[m].IMOEX = ((d.close / bi - 1) * 100); });
-    mr.forEach(d => { const m = d.date.substring(0, 7); if (!map[m]) map[m] = { month: m }; map[m].RTSI = ((d.close / br - 1) * 100); });
+    return Object.values(map).sort((a, b) => a.month.localeCompare(b.month));
+  }, [data]);
+
+  // MOEX vs Peers (normalized %)
+  const peerData = useMemo(() => {
+    const ms = monthlyDownsample(data.stock);
+    const bm = ms[0]?.close || 1;
+    const map = {};
+    ms.forEach(d => { const m = d.date.substring(0, 7); if (!map[m]) map[m] = { month: m }; map[m].MOEX = +((d.close / bm - 1) * 100).toFixed(1); });
+    PEER_STOCKS.forEach(p => {
+      const arr = monthlyDownsample(data.peers[p.ticker] || []);
+      const b = arr[0]?.close || 1;
+      arr.forEach(d => { const m = d.date.substring(0, 7); if (!map[m]) map[m] = { month: m }; map[m][p.ticker] = +((d.close / b - 1) * 100).toFixed(1); });
+    });
     return Object.values(map).sort((a, b) => a.month.localeCompare(b.month));
   }, [data]);
 
   // Dividends chart
   const divChartData = useMemo(() => {
     if (!data.dividends || data.dividends.length === 0) return [];
-    return data.dividends.map(d => ({
-      year: d.date ? d.date.substring(0, 4) : '?',
-      date: d.date,
-      value: d.value,
-    }));
+    return data.dividends.map(d => ({ year: d.date ? d.date.substring(0, 4) : '?', date: d.date, value: d.value }));
   }, [data]);
 
   // Factor analysis (normalized base=100)
-  const { from: pFrom, to: pTo } = getPeriodDates(period);
   const factorData = useMemo(() => {
     const ms = monthlyDownsample(data.stock);
     const mb = monthlyDownsample(data.brent);
@@ -634,17 +668,13 @@ function MOEXDashboard() {
     return Object.values(map).sort((a, b) => a.month.localeCompare(b.month));
   }, [data, pFrom, pTo]);
 
-  // Correlations (Pearson on monthly returns)
+  // Correlations
   const correlations = useMemo(() => {
     const retMoex = monthlyReturns(data.stock).map(r => r.ret);
     const retBrent = monthlyReturns(data.brent).map(r => r.ret);
     const retUsd = monthlyReturns(data.usdRub).map(r => r.ret);
     const retImoex = monthlyReturns(data.imoex).map(r => r.ret);
-    return {
-      brent: pearson(retMoex, retBrent),
-      usdRub: pearson(retMoex, retUsd),
-      imoex: pearson(retMoex, retImoex),
-    };
+    return { brent: pearson(retMoex, retBrent), usdRub: pearson(retMoex, retUsd), imoex: pearson(retMoex, retImoex) };
   }, [data]);
 
   // Trading volumes (monthly)
@@ -666,7 +696,7 @@ function MOEXDashboard() {
     return Object.values(map).sort((a, b) => a.month.localeCompare(b.month));
   }, [data]);
 
-  // Macro data
+  // Macro
   const gdpData = useMemo(() => data.wbGdp.filter(d => d.country === 'RU').sort((a, b) => a.year - b.year).map(d => ({ year: d.year, gdp: d.value })), [data]);
   const cpiData = useMemo(() => data.wbCpi.filter(d => d.country === 'RU').sort((a, b) => a.year - b.year).map(d => ({ year: d.year, cpi: d.value })), [data]);
   const keyRateData = useMemo(() => interpolateKeyRate(data.keyRateHistory, pFrom, pTo), [data.keyRateHistory, pFrom, pTo]);
@@ -695,7 +725,7 @@ function MOEXDashboard() {
           React.createElement('button', {
             onClick: () => loadAll(true), disabled: loading,
             className: 'px-4 py-2 bg-gold/10 border border-gold/30 text-gold rounded-lg text-xs font-mono hover:bg-gold/20 transition disabled:opacity-50'
-          }, loading ? '⟳ Загрузка...' : '⟳ Обновить данные')
+          }, loading ? '⟳ Загрузка...' : '⟳ Обновить')
         )
       )
     ),
@@ -710,23 +740,32 @@ function MOEXDashboard() {
         React.createElement(KPICard, { label: 'USD/RUB', value: kpis.usdRub, subtitle: kpis.usdDate ? fmtDate(kpis.usdDate) : '', loading })
       ),
 
-      // ── 1. ЦЕНА АКЦИИ ──
+      // ── 1. ЦЕНА АКЦИИ + дивидендные отсечки ──
       React.createElement(Section, { title: 'ЦЕНА АКЦИИ MOEX', source: 'Supabase / ISS MOEX', updatedAt: data.stock[data.stock.length - 1]?.date },
         loading && priceChartData.length === 0
           ? React.createElement(Skeleton, { h: 'h-80' })
           : React.createElement(ResponsiveContainer, { width: '100%', height: 400 },
-              React.createElement(ComposedChart, { data: priceChartData, margin: { top: 10, right: 10, left: 0, bottom: 5 } },
+              React.createElement(ComposedChart, { data: priceChartData, syncId: 'moex', margin: { top: 10, right: 10, left: 0, bottom: 5 } },
                 React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#1e293b' }),
                 React.createElement(XAxis, { dataKey: 'month', tick: { fontSize: 10, fill: C.muted }, interval: ti(priceChartData) }),
                 React.createElement(YAxis, { yAxisId: 'price', tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => v + ' ₽' }),
                 React.createElement(YAxis, { yAxisId: 'vol', orientation: 'right', tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => fmtNum(v) }),
                 React.createElement(Tooltip, ttip(v => fmtNum(v, 2))),
                 React.createElement(Legend, { wrapperStyle: { fontSize: 11 } }),
-                ...EVENTS.filter(e => ['2014-03-17', '2022-02-24', '2013-02-15'].includes(e.date)).map((e, i) =>
+                // Dividend cutoff lines
+                ...divLines.map((dl, i) =>
+                  React.createElement(ReferenceLine, {
+                    key: 'div' + i, x: dl.x, yAxisId: 'price',
+                    stroke: C.green, strokeDasharray: '4 3', strokeWidth: 1.5,
+                    label: { value: dl.label, position: 'top', fontSize: 9, fill: C.green }
+                  })
+                ),
+                // Key events
+                ...EVENTS.filter(e => ['2014-03-17', '2022-02-24', '2013-02-15'].includes(e.date) && e.date >= pFrom).map((e, i) =>
                   React.createElement(ReferenceLine, {
                     key: 'ev' + i, x: e.date.substring(0, 7), yAxisId: 'price',
                     stroke: e.color, strokeDasharray: '3 3',
-                    label: { value: e.label.substring(0, 18), position: 'top', fontSize: 8, fill: e.color }
+                    label: { value: e.label.substring(0, 18), position: 'insideTopLeft', fontSize: 8, fill: e.color }
                   })
                 ),
                 React.createElement(Bar, { yAxisId: 'vol', dataKey: 'value', name: 'Объём (₽)', fill: C.cyan, fillOpacity: 0.3, radius: [2, 2, 0, 0] }),
@@ -735,53 +774,86 @@ function MOEXDashboard() {
             )
       ),
 
-      // ── 2. КАПИТАЛИЗАЦИЯ ──
+      // ── 2. КАПИТАЛИЗАЦИЯ + ДОЛЯ В РЫНКЕ ──
       React.createElement(Section, { title: 'КАПИТАЛИЗАЦИЯ MOEX', source: 'Supabase / ISS MOEX (расчёт)' },
         loading && capChartData.length === 0
           ? React.createElement(Skeleton, { h: 'h-64' })
           : React.createElement('div', null,
-              React.createElement(ResponsiveContainer, { width: '100%', height: 300 },
-                React.createElement(AreaChart, { data: capChartData },
+              React.createElement(ResponsiveContainer, { width: '100%', height: 320 },
+                React.createElement(ComposedChart, { data: capChartData, syncId: 'moex' },
                   React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#1e293b' }),
                   React.createElement(XAxis, { dataKey: 'month', tick: { fontSize: 10, fill: C.muted }, interval: ti(capChartData) }),
-                  React.createElement(YAxis, { tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => fmtNum(v) }),
-                  React.createElement(Tooltip, ttip(v => fmtNum(v) + ' ₽')),
-                  React.createElement(Area, { type: 'monotone', dataKey: 'cap', name: 'Капитализация', stroke: C.gold, fill: C.gold, fillOpacity: 0.15, strokeWidth: 2 })
+                  React.createElement(YAxis, { yAxisId: 'cap', tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => fmtNum(v) }),
+                  React.createElement(YAxis, { yAxisId: 'share', orientation: 'right', tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => v + '%', domain: [0, 'auto'] }),
+                  React.createElement(Tooltip, { content: (props) => React.createElement(ChartTooltip, { ...props, format: (v) => {
+                    if (v > 50) return fmtNum(v) + ' ₽';
+                    return v?.toFixed(2) + '%';
+                  }}) }),
+                  React.createElement(Legend, { wrapperStyle: { fontSize: 11 } }),
+                  React.createElement(Area, { yAxisId: 'cap', type: 'monotone', dataKey: 'cap', name: 'Капитализация', stroke: C.gold, fill: C.gold, fillOpacity: 0.15, strokeWidth: 2 }),
+                  React.createElement(Line, { yAxisId: 'share', type: 'monotone', dataKey: 'share', name: 'Доля в IMOEX (%)', stroke: C.cyan, strokeWidth: 2, dot: false, connectNulls: true })
                 )
               ),
               React.createElement('p', { className: 'text-xs text-muted mt-2 italic' },
-                `Расчёт: цена закрытия × ${fmtNum(issueSize)} акций. Возможна погрешность из-за допэмиссий.`
+                `Расчёт: цена × ${fmtNum(issueSize)} акций. Доля = капитализация MOEX / капитализация IMOEX.`
               )
             )
       ),
 
       // ── 3. MOEX vs ИНДЕКСЫ ──
       React.createElement(Section, { title: 'MOEX vs ИНДЕКСЫ (ДОХОДНОСТЬ %)', source: 'Supabase / ISS MOEX' },
+        React.createElement(ToggleLegend, {
+          items: [{ key: 'MOEX', label: 'MOEX (акция)', color: C.gold }, { key: 'IMOEX', label: 'IMOEX', color: C.cyan }],
+          hidden: hidIdx, onToggle: toggleIdx,
+        }),
         loading && vsIndexData.length === 0
           ? React.createElement(Skeleton, { h: 'h-72' })
           : React.createElement(ResponsiveContainer, { width: '100%', height: 320 },
-              React.createElement(LineChart, { data: vsIndexData },
+              React.createElement(LineChart, { data: vsIndexData, syncId: 'moex' },
                 React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#1e293b' }),
                 React.createElement(XAxis, { dataKey: 'month', tick: { fontSize: 10, fill: C.muted }, interval: ti(vsIndexData) }),
                 React.createElement(YAxis, { tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => v.toFixed(0) + '%' }),
                 React.createElement(Tooltip, ttip(v => v?.toFixed(1) + '%')),
-                React.createElement(Legend, { wrapperStyle: { fontSize: 11 } }),
                 React.createElement(ReferenceLine, { y: 0, stroke: C.muted, strokeDasharray: '2 2' }),
-                React.createElement(Line, { type: 'monotone', dataKey: 'MOEX', name: 'MOEX (акция)', stroke: C.gold, strokeWidth: 2.5, dot: false }),
-                React.createElement(Line, { type: 'monotone', dataKey: 'IMOEX', name: 'IMOEX', stroke: C.cyan, strokeWidth: 1.5, dot: false }),
-                React.createElement(Line, { type: 'monotone', dataKey: 'RTSI', name: 'RTSI', stroke: C.green, strokeWidth: 1.5, dot: false })
+                React.createElement(Line, { type: 'monotone', dataKey: 'MOEX', name: 'MOEX (акция)', stroke: C.gold, strokeWidth: 2.5, dot: false, hide: hidIdx.has('MOEX') }),
+                React.createElement(Line, { type: 'monotone', dataKey: 'IMOEX', name: 'IMOEX', stroke: C.cyan, strokeWidth: 1.5, dot: false, hide: hidIdx.has('IMOEX') })
               )
             )
       ),
 
-      // ── 4. ДИВИДЕНДЫ ──
+      // ── 4. MOEX vs PEERS (ФИНСЕКТОР) ──
+      React.createElement(Section, { title: 'MOEX vs PEERS — ФИНСЕКТОР (ДОХОДНОСТЬ %)', source: 'Supabase / ISS MOEX' },
+        React.createElement(ToggleLegend, {
+          items: [
+            { key: 'MOEX', label: 'MOEX', color: C.gold },
+            ...PEER_STOCKS.map(p => ({ key: p.ticker, label: p.label, color: p.color })),
+          ],
+          hidden: hidPeer, onToggle: togglePeer,
+        }),
+        loading && peerData.length === 0
+          ? React.createElement(Skeleton, { h: 'h-72' })
+          : React.createElement(ResponsiveContainer, { width: '100%', height: 340 },
+              React.createElement(LineChart, { data: peerData, syncId: 'moex' },
+                React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#1e293b' }),
+                React.createElement(XAxis, { dataKey: 'month', tick: { fontSize: 10, fill: C.muted }, interval: ti(peerData) }),
+                React.createElement(YAxis, { tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => v + '%' }),
+                React.createElement(Tooltip, ttip(v => v?.toFixed(1) + '%')),
+                React.createElement(ReferenceLine, { y: 0, stroke: C.muted, strokeDasharray: '2 2' }),
+                React.createElement(Line, { type: 'monotone', dataKey: 'MOEX', name: 'MOEX', stroke: C.gold, strokeWidth: 2.5, dot: false, hide: hidPeer.has('MOEX') }),
+                ...PEER_STOCKS.map(p =>
+                  React.createElement(Line, { key: p.ticker, type: 'monotone', dataKey: p.ticker, name: p.label, stroke: p.color, strokeWidth: 1.5, dot: false, hide: hidPeer.has(p.ticker) })
+                )
+              )
+            )
+      ),
+
+      // ── 5. ДИВИДЕНДЫ ──
       React.createElement(Section, { title: 'ДИВИДЕНДЫ', source: 'Supabase / ISS MOEX' },
         loading && divChartData.length === 0
           ? React.createElement(Skeleton, { h: 'h-64' })
           : divChartData.length === 0
             ? React.createElement('div', { className: 'text-muted text-center py-8' }, 'Данные о дивидендах загружаются...')
             : React.createElement('div', { className: 'grid md:grid-cols-2 gap-6' },
-                // Bar chart
                 React.createElement('div', null,
                   React.createElement('h3', { className: 'text-sm text-muted mb-3' }, 'Дивиденд на акцию (₽)'),
                   React.createElement(ResponsiveContainer, { width: '100%', height: 280 },
@@ -794,7 +866,6 @@ function MOEXDashboard() {
                     )
                   )
                 ),
-                // Table
                 React.createElement('div', null,
                   React.createElement('h3', { className: 'text-sm text-muted mb-3' }, 'История выплат'),
                   React.createElement('div', { className: 'max-h-[280px] overflow-y-auto' },
@@ -821,27 +892,34 @@ function MOEXDashboard() {
               )
       ),
 
-      // ── 5. ФАКТОРНЫЙ АНАЛИЗ ──
+      // ── 6. ФАКТОРНЫЙ АНАЛИЗ ──
       React.createElement(Section, { title: 'ФАКТОРНЫЙ АНАЛИЗ', source: 'Supabase / ISS MOEX' },
+        React.createElement(ToggleLegend, {
+          items: [
+            { key: 'moex', label: 'MOEX', color: C.gold },
+            { key: 'brent', label: 'Brent', color: C.green },
+            { key: 'usdRub', label: 'USD/RUB', color: C.danger },
+            { key: 'keyRate', label: 'Ключевая ставка', color: C.purple },
+          ],
+          hidden: hidFactor, onToggle: toggleFactor,
+        }),
         loading && factorData.length === 0
           ? React.createElement(Skeleton, { h: 'h-80' })
           : React.createElement('div', null,
               React.createElement(ResponsiveContainer, { width: '100%', height: 340 },
-                React.createElement(ComposedChart, { data: factorData },
+                React.createElement(ComposedChart, { data: factorData, syncId: 'moex' },
                   React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#1e293b' }),
                   React.createElement(XAxis, { dataKey: 'month', tick: { fontSize: 10, fill: C.muted }, interval: ti(factorData) }),
                   React.createElement(YAxis, { yAxisId: 'left', tick: { fontSize: 10, fill: C.muted } }),
                   React.createElement(YAxis, { yAxisId: 'right', orientation: 'right', tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => v + '%' }),
                   React.createElement(Tooltip, ttip(v => v?.toFixed(1))),
-                  React.createElement(Legend, { wrapperStyle: { fontSize: 11 } }),
                   React.createElement(ReferenceLine, { y: 100, yAxisId: 'left', stroke: C.muted, strokeDasharray: '2 2' }),
-                  React.createElement(Line, { yAxisId: 'left', type: 'monotone', dataKey: 'moex', name: 'MOEX (акция)', stroke: C.gold, strokeWidth: 2, dot: false }),
-                  React.createElement(Line, { yAxisId: 'left', type: 'monotone', dataKey: 'brent', name: 'Brent', stroke: C.green, strokeWidth: 1.5, dot: false }),
-                  React.createElement(Line, { yAxisId: 'left', type: 'monotone', dataKey: 'usdRub', name: 'USD/RUB', stroke: C.danger, strokeWidth: 1.5, dot: false }),
-                  React.createElement(Line, { yAxisId: 'right', type: 'stepAfter', dataKey: 'keyRate', name: 'Ключевая ставка', stroke: C.purple, strokeWidth: 1.5, dot: false, strokeDasharray: '4 2' })
+                  React.createElement(Line, { yAxisId: 'left', type: 'monotone', dataKey: 'moex', name: 'MOEX (акция)', stroke: C.gold, strokeWidth: 2, dot: false, hide: hidFactor.has('moex') }),
+                  React.createElement(Line, { yAxisId: 'left', type: 'monotone', dataKey: 'brent', name: 'Brent', stroke: C.green, strokeWidth: 1.5, dot: false, hide: hidFactor.has('brent') }),
+                  React.createElement(Line, { yAxisId: 'left', type: 'monotone', dataKey: 'usdRub', name: 'USD/RUB', stroke: C.danger, strokeWidth: 1.5, dot: false, hide: hidFactor.has('usdRub') }),
+                  React.createElement(Line, { yAxisId: 'right', type: 'stepAfter', dataKey: 'keyRate', name: 'Ключевая ставка', stroke: C.purple, strokeWidth: 1.5, dot: false, strokeDasharray: '4 2', hide: hidFactor.has('keyRate') })
                 )
               ),
-              // Correlation mini-table
               React.createElement('div', { className: 'mt-4 flex flex-wrap gap-4' },
                 React.createElement('div', { className: 'bg-bg-card2 rounded-lg px-4 py-2 border border-gray-700' },
                   React.createElement('span', { className: 'text-xs text-muted' }, 'Корреляция MOEX↔Brent: '),
@@ -856,11 +934,11 @@ function MOEXDashboard() {
                   React.createElement('span', { className: 'text-sm font-mono text-green-400' }, correlations.imoex != null ? correlations.imoex.toFixed(3) : '—')
                 )
               ),
-              React.createElement('p', { className: 'text-xs text-muted mt-2 italic' }, 'Корреляция Пирсона по месячным доходностям за выбранный период. База нормализации = 100.')
+              React.createElement('p', { className: 'text-xs text-muted mt-2 italic' }, 'Корреляция Пирсона по месячным доходностям. База нормализации = 100.')
             )
       ),
 
-      // ── 6. ОБОРОТЫ БИРЖИ ──
+      // ── 7. ОБОРОТЫ БИРЖИ ──
       React.createElement(Section, { title: 'ОБОРОТЫ ФОНДОВОГО РЫНКА (₽)', source: 'Supabase / ISS MOEX' },
         loading && volData.length === 0
           ? React.createElement(Skeleton, { h: 'h-64' })
@@ -868,7 +946,7 @@ function MOEXDashboard() {
             ? React.createElement('div', { className: 'text-muted text-center py-8' }, 'Данные загружаются...')
             : React.createElement('div', null,
                 React.createElement(ResponsiveContainer, { width: '100%', height: 280 },
-                  React.createElement(BarChart, { data: volData },
+                  React.createElement(BarChart, { data: volData, syncId: 'moex' },
                     React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#1e293b' }),
                     React.createElement(XAxis, { dataKey: 'month', tick: { fontSize: 10, fill: C.muted }, interval: ti(volData) }),
                     React.createElement(YAxis, { tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => fmtNum(v) }),
@@ -880,32 +958,42 @@ function MOEXDashboard() {
               )
       ),
 
-      // ── 7. МИРОВЫЕ БИРЖИ ──
+      // ── 8. МИРОВЫЕ БИРЖИ ──
       React.createElement(Section, { title: 'MOEX vs МИРОВЫЕ БИРЖИ (ДОХОДНОСТЬ %)', source: 'Supabase / stooq.com' },
+        React.createElement(ToggleLegend, {
+          items: [
+            { key: 'MOEX', label: 'MOEX', color: C.gold },
+            { key: 'ICE', label: 'ICE', color: C.cyan },
+            { key: 'CME', label: 'CME', color: C.green },
+            { key: 'HKEX', label: 'HKEX', color: C.orange },
+            { key: 'LSEG', label: 'LSEG', color: C.pink },
+            { key: 'DB1', label: 'DB1', color: C.indigo },
+          ],
+          hidden: hidGlobal, onToggle: toggleGlobal,
+        }),
         loading && globalData.length === 0
           ? React.createElement(Skeleton, { h: 'h-72' })
           : React.createElement(ResponsiveContainer, { width: '100%', height: 340 },
-              React.createElement(LineChart, { data: globalData },
+              React.createElement(LineChart, { data: globalData, syncId: 'moex' },
                 React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#1e293b' }),
                 React.createElement(XAxis, { dataKey: 'month', tick: { fontSize: 10, fill: C.muted }, interval: ti(globalData) }),
                 React.createElement(YAxis, { tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => v + '%' }),
                 React.createElement(Tooltip, ttip(v => v?.toFixed(1) + '%')),
-                React.createElement(Legend, { wrapperStyle: { fontSize: 10 } }),
                 React.createElement(ReferenceLine, { y: 0, stroke: C.muted, strokeDasharray: '2 2' }),
-                React.createElement(Line, { type: 'monotone', dataKey: 'MOEX', name: 'MOEX', stroke: C.gold, strokeWidth: 2.5, dot: false }),
+                React.createElement(Line, { type: 'monotone', dataKey: 'MOEX', name: 'MOEX', stroke: C.gold, strokeWidth: 2.5, dot: false, hide: hidGlobal.has('MOEX') }),
                 ...[
                   { key: 'ICE', color: C.cyan }, { key: 'CME', color: C.green },
                   { key: 'HKEX', color: C.orange }, { key: 'LSEG', color: C.pink },
                   { key: 'DB1', color: C.indigo },
                 ].map(g => React.createElement(Line, {
                   key: g.key, type: 'monotone', dataKey: g.key, name: g.key,
-                  stroke: g.color, strokeWidth: 1.5, dot: false
+                  stroke: g.color, strokeWidth: 1.5, dot: false, hide: hidGlobal.has(g.key)
                 }))
               )
             )
       ),
 
-      // ── 8. МАКРОЭКОНОМИКА ──
+      // ── 9. МАКРОЭКОНОМИКА ──
       React.createElement('div', { className: 'grid md:grid-cols-3 gap-6' },
         React.createElement(Section, { title: 'ВВП РОССИИ (USD)', source: 'World Bank' },
           loading && gdpData.length === 0
@@ -935,7 +1023,7 @@ function MOEXDashboard() {
         ),
         React.createElement(Section, { title: 'КЛЮЧЕВАЯ СТАВКА ЦБ', source: 'ЦБ РФ' },
           React.createElement(ResponsiveContainer, { width: '100%', height: 240 },
-            React.createElement(AreaChart, { data: keyRateData },
+            React.createElement(AreaChart, { data: keyRateData, syncId: 'moex' },
               React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#1e293b' }),
               React.createElement(XAxis, { dataKey: 'date', tick: { fontSize: 10, fill: C.muted }, interval: ti(keyRateData) }),
               React.createElement(YAxis, { tick: { fontSize: 10, fill: C.muted }, tickFormatter: v => v + '%' }),
@@ -946,7 +1034,7 @@ function MOEXDashboard() {
         )
       ),
 
-      // ── 9. ХРОНОЛОГИЯ ──
+      // ── 10. ХРОНОЛОГИЯ ──
       React.createElement(Section, { title: 'ХРОНОЛОГИЯ СОБЫТИЙ', source: 'Публичные источники' },
         React.createElement('div', { className: 'relative' },
           React.createElement('div', { className: 'absolute left-4 top-0 bottom-0 w-0.5 bg-gray-700' }),

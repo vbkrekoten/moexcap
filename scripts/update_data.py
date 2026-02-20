@@ -217,11 +217,16 @@ def update_index_history(ticker: str):
         close = row[cols.index("CLOSE")]
         if not close or close <= 0:
             return None
-        return {
+        result = {
             "ticker": ticker,
             "trade_date": row[cols.index("TRADEDATE")],
             "close": close,
         }
+        if "CAPITALIZATION" in cols:
+            cap = row[cols.index("CAPITALIZATION")]
+            if cap and cap > 0:
+                result["capitalization"] = cap
+        return result
 
     rows = fetch_moex_paginated(
         f"https://iss.moex.com/iss/history/engines/stock/markets/index/securities/{ticker}.json"
@@ -416,6 +421,42 @@ def update_global_exchanges():
         log.info(f"{source}: upserted {len(all_rows)} total rows")
 
 
+PEER_TICKERS = ["SBER", "VTBR", "T", "CBOM", "BSPB"]
+
+
+def update_peer_stock_history():
+    """Fetch daily close prices for peer financial sector stocks."""
+    for ticker in PEER_TICKERS:
+        source = f"peer_{ticker}"
+        from_date, to_date = incremental_dates(source)
+        if from_date > to_date:
+            log.info(f"{source}: already up to date")
+            continue
+
+        def parse(cols, row, _ticker=ticker):
+            close = row[cols.index("CLOSE")]
+            if not close or close <= 0:
+                return None
+            return {
+                "ticker": _ticker,
+                "trade_date": row[cols.index("TRADEDATE")],
+                "close": close,
+            }
+
+        rows = fetch_moex_paginated(
+            f"https://iss.moex.com/iss/history/engines/stock/markets/shares/boards/TQBR/securities/{ticker}.json"
+            "?from={from_}&till={to}&iss.meta=off&start={start}",
+            from_date, to_date, parse,
+        )
+        if rows:
+            upsert_batch("peer_stock_history", rows)
+            set_last_date(source, rows[-1]["trade_date"])
+            log.info(f"{source}: upserted {len(rows)} rows")
+        else:
+            log.info(f"{source}: no new data")
+        time.sleep(0.5)
+
+
 def update_key_rates():
     source = "key_rates"
     result = sb.table(source).select("effective_date").limit(1).execute()
@@ -437,12 +478,12 @@ def main():
         ("moex_live", update_moex_live),
         ("moex_dividends", update_moex_dividends),
         ("index_history/IMOEX", lambda: update_index_history("IMOEX")),
-        ("index_history/RTSI", lambda: update_index_history("RTSI")),
         ("currency_history", update_currency_history),
         ("brent_history", update_brent_history),
         ("trading_volumes", update_trading_volumes),
         ("world_bank", update_world_bank),
         ("global_exchanges", update_global_exchanges),
+        ("peers", update_peer_stock_history),
         ("key_rates", update_key_rates),
     ]
 
