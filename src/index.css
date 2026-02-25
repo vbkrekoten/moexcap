@@ -1,0 +1,100 @@
+@import 'tailwindcss';
+
+/* ── Theme tokens ── */
+@theme {
+  --color-bg: #0a0e17;
+  --color-bg-card: #111827;
+  --color-bg-card2: #1a2234;
+  --color-gold: #e8c547;
+  --color-cyan: #4fc3f7;
+  --color-danger: #ef5350;
+  --color-muted: #8892a4;
+  --color-success: #66bb6a;
+  --color-purple: #ab47bc;
+  --color-orange: #ffa726;
+  --color-pink: #ec407a;
+  --color-teal: #26a69a;
+  --color-lime: #d4e157;
+  --color-indigo: #5c6bc0;
+
+  --font-mono: 'IBM Plex Mono', monospace;
+  --font-display: 'Bebas Neue', sans-serif;
+}
+
+/* ── Base styles ── */
+html, body {
+  background: var(--color-bg);
+  color: #e2e8f0;
+  font-family: var(--font-mono);
+  margin: 0;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+/* ── Animations ── */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #1a2234 25%, #243049 50%, #1a2234 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 4px;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in {
+  animation: fadeIn 0.4s ease-out;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--color-bg); }
+::-webkit-scrollbar-thumb { background: #2d3748; border-radius: 3px; }
+
+/* ── Toast ── */
+.toast-container {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.toast {
+  padding: 10px 16px;
+  border-radius: 6px;
+  font-size: 12px;
+  max-width: 360px;
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* ── Data table ── */
+table.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+table.data-table th {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid #2d3748;
+  color: var(--color-muted);
+  font-weight: 500;
+}
+
+table.data-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #1a2234;
+}
